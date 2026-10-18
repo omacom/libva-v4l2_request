@@ -869,6 +869,20 @@ static VAStatus av1_render_buffer(struct v4l2r_context *ctx,
 	case VAPictureParameterBufferType:
 		if (v4l2r_buffer_bytes(buf) < sizeof(codec->va_pic))
 			return VA_STATUS_ERROR_INVALID_BUFFER;
+		const VADecPictureParameterBufferAV1 *pic = buf->data;
+		/* AVD does not implement grain synthesis, and this codec has no
+		 * separate display-surface output path. Reject before changing the
+		 * held picture or submitting it with the new picture's DPB. Merely
+		 * advertising a grain control is insufficient to populate that
+		 * second surface. Sequence-level presence alone is not a request. */
+		if (pic->film_grain_info.film_grain_info_fields.bits.apply_grain &&
+		    (ctx->is_avd || !codec->has_film_grain ||
+		     pic->current_display_picture != pic->current_frame)) {
+			v4l2r_diag(ctx, V4L2R_DIAG_LEVEL_WARNING, V4L2R_DIAG_UNSUPPORTED,
+				   "av1-film-grain", 0,
+				   "AV1 film grain requires an implemented synthesis and display-surface path");
+			return VA_STATUS_ERROR_UNIMPLEMENTED;
+		}
 		codec->va_pic = *(const VADecPictureParameterBufferAV1 *)buf->data;
 		codec->have_pic = true;
 		/* The previous frame was held back so its refresh_frame_flags

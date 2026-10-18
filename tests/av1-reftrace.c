@@ -338,6 +338,46 @@ static void admission_case(const char *name)
     }
 }
 
+/* Exercise the production codec entry points, including a previously held
+ * grain-free picture and clean continuation after an unsupported picture. */
+static void grain_case(const char *name)
+{
+    bool apply = strcmp(name, "grain-sequence-only") != 0;
+    bool reject = strcmp(name, "grain-sequence-only") != 0 &&
+                  strcmp(name, "grain-other-inplace") != 0;
+    ctx->is_avd = strcmp(name, "grain-other-inplace") != 0 &&
+                  strcmp(name, "grain-other-display") != 0 &&
+                  strcmp(name, "grain-no-control") != 0;
+    codec.has_film_grain = strcmp(name, "grain-no-control") != 0;
+    picture(0, 0, 0);
+    assert(assemble() == VA_STATUS_SUCCESS);
+    assert(codec.pend_valid && !requests_queued);
+    picture(1, 0, 1);
+    pic.seq_info_fields.fields.film_grain_params_present = 1;
+    pic.film_grain_info.film_grain_info_fields.bits.apply_grain = apply;
+    pic.current_display_picture = !strcmp(name, "grain-avd-inplace") ||
+                                  !strcmp(name, "grain-other-inplace") ||
+                                  !strcmp(name, "grain-no-control") ?
+                                  pic.current_frame : sid[2];
+    assert(assemble() == (reject ? VA_STATUS_ERROR_UNIMPLEMENTED : VA_STATUS_SUCCESS));
+    if (reject) {
+        assert(!codec.have_pic && codec.pend_valid);
+        assert(codec.pend_current == sid[0]);
+        assert(!requests_queued && !log_count);
+        assert(av1_flush(ctx, NULL) == VA_STATUS_SUCCESS);
+        assert(requests_queued == 1 && frame(0)->order_hint == 0);
+    } else {
+        assert(requests_queued == 1 && codec.pend_current == sid[1]);
+        assert(av1_flush(ctx, NULL) == VA_STATUS_SUCCESS);
+        assert(requests_queued == 2 && frame(1)->order_hint == 1);
+    }
+    picture(3, 0, 3);
+    assert(assemble() == VA_STATUS_SUCCESS);
+    assert(av1_flush(ctx, NULL) == VA_STATUS_SUCCESS);
+    assert(requests_queued == (reject ? 2u : 3u));
+    assert(frame(requests_queued - 1)->order_hint == 3);
+}
+
 static pthread_barrier_t gate_barrier;
 static bool gate_expected;
 
@@ -398,6 +438,15 @@ int main(int argc, char **argv)
         assert(!unsetenv("LIBVA_V4L2_TRACE"));
     assert(dup2(fileno(sink), STDERR_FILENO) == STDERR_FILENO);
     setup();
+    if (!strncmp(argv[1], "grain-", 6)) {
+        grain_case(argv[1]);
+        snapshot(argv[3]);
+        teardown();
+        log_reset();
+        fclose(sink);
+        printf("PASS %s trace=%s grain admission and pending-picture preservation\n", argv[1], argv[2]);
+        return 0;
+    }
     if (!strncmp(argv[1], "required-", 9) || !strcmp(argv[1], "primary-bounds") ||
         !strcmp(argv[1], "slot-bounds") || !strcmp(argv[1], "valid-primary") ||
         !strcmp(argv[1], "key-default") || !strcmp(argv[1], "intra-default") ||
