@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 RUNNER=Path(__file__).with_name('concurrent-va-run.py')
@@ -26,11 +27,57 @@ def exited(pid):
     except FileNotFoundError:return True
 
 
-def wait_file(path):
-    limit=time.monotonic()+4
-    while not path.exists() and time.monotonic()<limit:time.sleep(.01)
-    require(path.exists(),'fixture did not start')
-    return int(path.read_text())
+def published_pid(path):
+    try:pid=int(path.read_text())
+    except (FileNotFoundError,ValueError):return None
+    # Never turn an unfinished/invalid publication into a process-group signal.
+    return pid if pid>1 else None
+
+
+def wait_file(path,timeout=4):
+    limit=time.monotonic()+timeout
+    while True:
+        pid=published_pid(path)
+        if pid is not None:return pid
+        if time.monotonic()>=limit:break
+        time.sleep(.01)
+    require(False,'fixture did not publish a valid PID')
+
+
+
+def pid_file_tests(root):
+    # Force the exact observed create-before-write race: publication cannot
+    # finish until the reader has actually observed the empty file.
+    path=root/'publishing.pid';path.write_text('')
+    observed=threading.Event()
+    class PublishingPath:
+        def exists(self):return path.exists()
+        def read_text(self):
+            text=path.read_text()
+            if not text:observed.set()
+            return text
+    def publish():
+        if observed.wait(timeout=2):path.write_text(str(os.getpid()))
+    writer=threading.Thread(target=publish)
+    writer.start()
+    try:require(wait_file(PublishingPath())==os.getpid(),'incomplete PID publication was not retried')
+    finally:
+        observed.set();writer.join(timeout=2)
+    require(not writer.is_alive(),'PID fixture writer leaked')
+    for text in ('', 'not a PID', '0', '-7', '1'):
+        path.write_text(text)
+        require(published_pid(path) is None,'invalid PID accepted')
+        try:wait_file(path,timeout=.03)
+        except AssertionError as error:
+            require(str(error)=='fixture did not publish a valid PID','wrong publication failure')
+        else:raise AssertionError('invalid PID wait unexpectedly passed')
+    path.unlink()
+    require(published_pid(path) is None,'missing PID accepted')
+    try:wait_file(path,timeout=.03)
+    except AssertionError:pass
+    else:raise AssertionError('missing PID wait unexpectedly passed')
+    path.write_text(str(os.getpid()))
+    require(published_pid(path)==os.getpid(),'valid PID rejected')
 
 
 def oracle_tests():
@@ -92,9 +139,11 @@ def process_tests(root):
                 try:signal.pidfd_send_signal(handle,signal.SIGKILL)
                 except ProcessLookupError:pass
                 os.close(handle)
-            elif escaped and pidfile.exists():
-                try:os.kill(int(pidfile.read_text()),signal.SIGKILL)
-                except ProcessLookupError:pass
+            elif escaped:
+                published=published_pid(pidfile)
+                if published is not None:
+                    try:os.kill(published,signal.SIGKILL)
+                    except ProcessLookupError:pass
             if proc.poll() is None:proc.kill()
             proc.communicate(timeout=3)
 
@@ -131,6 +180,7 @@ def worker_tests(binary,root):
 if __name__=='__main__':
     mutations=oracle_tests()
     with tempfile.TemporaryDirectory(prefix='concurrent-va-negative-') as tmp:
-        root=Path(tmp);process_tests(root)
+        root=Path(tmp);pid_file_tests(root);process_tests(root)
         if len(sys.argv)>1:worker_tests(Path(sys.argv[1]).resolve(),root)
-    print(f'PASS: {mutations} oracle mutations; owned launch/exit/deadline/output/cancel/descendant cleanup; worker invalid/short-input paths')
+    worker_result='worker invalid/short-input paths' if len(sys.argv)>1 else 'worker binary checks not run'
+    print(f'PASS: PID publication controls; {mutations} oracle mutations; owned launch/exit/deadline/output/cancel/descendant cleanup; {worker_result}')
