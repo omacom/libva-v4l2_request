@@ -100,6 +100,12 @@ if conf.get('HAVE_V4L2_CTRL_HEVC') == 1
   # record must match the controls the in-memory device captured, tracing
   # must not change the submitted bytes or the VA status, and the checker
   # validates the writer's real output against its own fixtures.
+  hevc_padding = executable('hevc-padding', 'hevc-padding.c', driver_sources,
+    c_args: ['-UNDEBUG'],
+    include_directories: [root_inc, include_directories('../src')],
+    dependencies: [libva_dep, libdrm_dep, threads_dep],
+    link_args: ['-Wl,--wrap=ioctl', '-Wl,--wrap=poll', '-Wl,--wrap=__poll_chk'])
+  test('hevc-padding', hevc_padding, timeout: 30)
   hevc_reftrace = executable('hevc-reftrace', 'hevc-reftrace.c', driver_sources,
     c_args: ['-UNDEBUG'],
     include_directories: [root_inc, include_directories('../src')],

@@ -32,6 +32,7 @@ struct submission {
 static struct submission log_[MAX_SUBMISSIONS];
 static unsigned int log_count;
 static unsigned int requests_queued;
+static unsigned int last_output_bytesused;
 static bool fail_set_controls;
 
 static unsigned int fifo_out[64], fifo_out_head, fifo_out_tail;
@@ -85,8 +86,10 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
     }
     if (request == VIDIOC_QBUF) {
         const struct v4l2_buffer *b = arg;
-        if (V4L2_TYPE_IS_OUTPUT(b->type))
+        if (V4L2_TYPE_IS_OUTPUT(b->type)) {
+            last_output_bytesused = b->m.planes[0].bytesused;
             fifo_out[fifo_out_tail++ % 64] = b->index;
+        }
         else
             fifo_cap[fifo_cap_tail++ % 64] = b->index;
         return 0;
