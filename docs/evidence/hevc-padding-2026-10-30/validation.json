@@ -236,5 +236,30 @@
     "No new hardware campaign was run while preparing the draft PR.",
     "No independent review yet. Package pins and support matrix are unchanged.",
     "Private capture, frame hashes, credentials and unrelated logs are not published. Artifact digests and selected sanitized records identify the local evidence."
-  ]
+  ],
+  "review_followup": {
+    "date_utc": "2026-10-31",
+    "review": "https://github.com/omacom/libva-v4l2_request/pull/111#discussion_r4429821413",
+    "scope": "Tests and evidence only; src/ remains byte-for-byte identical to a81e456.",
+    "regression": "Slice-based mode with max_slice_params=1: first slice fills pending batch, second padded slice has byte offset within original size but past trimmed size. Reject INVALID_BUFFER without queuing any request or setting controls; retain pending first slice and preserve caller and stored parameter copies.",
+    "cases": "Eight additional cases: AVD/generic x Annex-B/no-start-code x invalid-offset/valid-offset control. Valid controls submit both slices, demonstrating the batch flush path is reachable.",
+    "negative_control": "Temporarily moved post-trim offset validation after the pending batch flush. New test aborted at requests_queued == queued_before. Restored original runtime source and rebuilt; test passed.",
+    "sanitizers": "address,undefined",
+    "tests_passed": 232,
+    "tests_failed": 0,
+    "software_frame_check": "passed",
+    "software_shared_contexts": "passed: 168 frames across four streams",
+    "commands": [
+      "uvx --from meson meson setup build-review -Db_sanitize=address,undefined",
+      "ninja -C build-review -j1",
+      "uvx --from meson meson test -C build-review --no-rebuild --num-processes 1 --print-errorlogs",
+      "sh tests/frame-check.sh",
+      "sh tests/shared-contexts.sh"
+    ],
+    "execution": "Companion tools/bounded-build, one worker. No new hardware test or installed-driver change.",
+    "local_log_sha256": {
+      "review-full.log": "166c6ccac1c49be26d3bee1304a02dc652aa138891164ee71efb3eb3d40a8c2a",
+      "review-mutation.log": "fc47bba6bb96c1e2d778c81e41c085904eac74fdefccda71e30698ca3ea19121"
+    }
+  }
 }
