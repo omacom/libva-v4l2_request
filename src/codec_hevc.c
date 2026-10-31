@@ -1029,6 +1029,7 @@ static VAStatus hevc_process_slice(struct v4l2r_context *ctx,
 {
 	struct hevc_context *codec = ctx->codec_priv;
 	const uint8_t *slice_data;
+	VASliceParameterBufferHEVC trimmed_slice;
 	struct hevc_slice_info info;
 	VAStatus status;
 
@@ -1045,6 +1046,20 @@ static VAStatus hevc_process_slice(struct v4l2r_context *ctx,
 	    !hevc_slice_refs_valid(codec, va_slice))
 		return VA_STATUS_ERROR_INVALID_BUFFER;
 	slice_data = data + va_slice->slice_data_offset;
+
+	/* Annex B trailing_zero_8bits are not part of the NAL unit. In
+	 * particular, VideoToolbox streams can leave long zero runs after a
+	 * slice; submitting those bytes makes Apple AVD fail with H0 errors.
+	 * An escaped cabac_zero_word ends in 0x03 and is preserved. Keep the
+	 * caller's parameters intact and use the same shortened size for the
+	 * parser, OUTPUT payload and V4L2 slice bit_size. */
+	trimmed_slice = *va_slice;
+	while (trimmed_slice.slice_data_size > 2 &&
+	       slice_data[trimmed_slice.slice_data_size - 1] == 0)
+		trimmed_slice.slice_data_size--;
+	if (trimmed_slice.slice_data_byte_offset > trimmed_slice.slice_data_size)
+		return VA_STATUS_ERROR_INVALID_BUFFER;
+	va_slice = &trimmed_slice;
 
 	/* Flush a full batch of slices as an intermediate request. */
 	if (codec->decode_mode == V4L2_STATELESS_HEVC_DECODE_MODE_SLICE_BASED &&
