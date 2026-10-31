@@ -1,0 +1,240 @@
+{
+  "description": "Selected M1 HEVC padding repair evidence; AI-prepared audit of retained local records. Not a full conformance or release qualification.",
+  "test_date_local": "2026-10-30",
+  "base_commit": "4f60c51f7841dd74bb61c94a4ad31e630bbdab01",
+  "tested_source_commit": "a81e456b18235bce556da6a0a4c5b066233d50d2",
+  "source_identity_limit": "Tests ran with the patch in the working tree before a81e456 was committed. Guard source_commit records the then-current base HEAD, not the dirty diff. Original repair commit is preserved; runtime source is unchanged by this evidence-only commit.",
+  "device": "Apple MacBook Air M1 2020 (T8103/J313)",
+  "running_kernel": "7.2.11-9-1.251-ARCH",
+  "kernel_limit": "Existing linux-aurora kernel was not modified or reloaded. Guard records module presence, not the identity of every loaded module patch. No boot or kernel qualification is claimed.",
+  "packages": {
+    "moonlight": "6.2.0-1",
+    "baseline_driver": "1.3.r11.r169.gc653eaa-1",
+    "ffmpeg": "2:9.0.2-2",
+    "libva": "2.24.1"
+  },
+  "build_tools": {
+    "meson": "1.12.1",
+    "compiler": "GCC 16.1.1 20260430",
+    "linker": "GNU ld.bfd 2.46.0",
+    "libva_pkg_config_api": "1.24.0",
+    "libdrm": "2.4.134"
+  },
+  "binary_sha256_at_contribution_audit": {
+    "release_build": "4d99da65c59a43a6de320dd7c29040cbf9de49f64dc1ecc183a6a6d71557cd2d",
+    "installed_stripped_moonlight_local": "316266c5d17d79898ea72b13fca744752963870bef39abb2f9834be783118f96"
+  },
+  "private_capture": {
+    "published": false,
+    "codec": "HEVC Main 8-bit 4:2:0",
+    "resolution": "2560x1600",
+    "frames": 509,
+    "ctb_size": 32,
+    "wpp": true,
+    "sha256": "086699dc56ccb92acb224bae376ce9476e5db61a391460402cb1f18e7ae8e01c",
+    "trailing_zero_bytes": 434466,
+    "first_slice_trailing_zero_bytes": 35,
+    "hardware_vs_software_matching_frames": 509,
+    "software_framemd5_file_sha256": "c81624c2bc263c05094b7d727edafaa22197a055bcd538e4ae0ab66d428a65eb",
+    "patched_hardware_framemd5_file_sha256": "c81624c2bc263c05094b7d727edafaa22197a055bcd538e4ae0ab66d428a65eb"
+  },
+  "offline": {
+    "sanitizers": "address,undefined",
+    "passed": 232,
+    "failed": 0,
+    "new_test": "hevc-padding",
+    "new_test_cases": "12 combinations: AVD/generic x Annex-B/no-start-code x 0/1/35 padding bytes, each containing two slices and an escaped 00 00 03 ending",
+    "negative_original_source": "assertion sp[0].bit_size == output_size[0] * 8 fails; signal ABRT",
+    "frame_check": "Native-size hashing: resolution change and crop match; truncated input fails.",
+    "shared_contexts": "Shared contexts, software: four streams, 168 frames match independent decoders",
+    "build_and_test_commands": [
+      "uvx --from meson meson setup build -Db_sanitize=address,undefined",
+      "ninja -C build -j1",
+      "uvx --from meson meson test -C build --no-rebuild --num-processes 1 --print-errorlogs",
+      "sh tests/frame-check.sh",
+      "sh tests/shared-contexts.sh",
+      "uvx --from meson meson setup build-release --buildtype=release",
+      "ninja -C build-release -j1 src/v4l2_request_drv_video.so"
+    ],
+    "execution": "Completed builds/tests used companion tools/bounded-build with one worker. An initial auto-parallel Meson build was stopped and rebuilt with -j1; it is not counted as a completed test run."
+  },
+  "hardware": {
+    "guard": "tests/hwguard.py",
+    "successful_runs_journal_since_local": "2026-10-30 19:56:55",
+    "journal_boundary_limit": "Earlier failed/preflight attempts are retained below. The final boundary follows those completed failures; it is not a claim of a fault-free whole boot.",
+    "offline_decode_environment": {
+      "LIBVA_DRIVER_NAME": "v4l2_request",
+      "LIBVA_DRIVERS_PATH": "<repair>/driver/build-release/src"
+    },
+    "live_environment": {
+      "LIBVA_DRIVER_NAME": "v4l2_request",
+      "LIBVA_DRIVERS_PATH": "<user-local Moonlight driver directory>"
+    },
+    "live_deadline_seconds": 150,
+    "live_client_arguments": "moonlight stream <private-host> Desktop --video-codec HEVC --video-decoder hardware --display-mode windowed --performance-overlay",
+    "decode_command_limit": "The retained decode log confirms HEVC via /dev/video0 [avd], NV12 2560x1600 and guard status ok; its full original FFmpeg argv was not retained in that log. No reconstructed argv is represented as historical measurement.",
+    "actual_driver_log_excerpt": [
+      "libva-v4l2request: detected 1 Request API decoder",
+      "libva-v4l2request: decoding hevc via /dev/video0 [avd] (media /dev/media0)",
+      "libva-v4l2request: surface 0x04000000 was exported before its first decode; decoding into client-exported dma-bufs",
+      "libva-v4l2request: using CAPTURE format NV12 (2560x1600)",
+      "{\"status\": \"ok\", \"returncode\": 0, \"timed_out\": false, \"wedged\": false, \"abort_reason\": null, \"busy\": false, \"owner\": null}"
+    ],
+    "live_stats": {
+      "duration_seconds": 140,
+      "resolution": "2560x1600",
+      "codec": "HEVC",
+      "decoder": "VAAPI / Apple AVD hardware",
+      "incoming_fps": 59.94,
+      "decoding_fps": 59.94,
+      "rendering_fps": 59.86,
+      "average_decoding_ms": 0.78,
+      "network_drops_percent": 0.0,
+      "network_jitter_drops_percent": 0.07,
+      "guard_status": "ok"
+    },
+    "visual_limit": "The live result measures decoded/rendered frame rates and driver selection. Independent visual confirmation or rendered-pixel comparison was not recorded.",
+    "attempt_final_records": [
+      {
+        "local_log_name": "baseline-guard.jsonl",
+        "run_id": "6faa880d-f1c2-4928-a72e-620b106b60ea",
+        "status": "preflight-error",
+        "abort_reason": "decoder already in use",
+        "time": "2026-10-30T19:50:30-0400"
+      },
+      {
+        "local_log_name": "baseline-guard2.jsonl",
+        "run_id": "2cdafe59-b1fc-4986-929c-c98a6ed682d1",
+        "status": "preflight-error",
+        "abort_reason": "existing decoder/kernel faults on this boot",
+        "time": "2026-10-30T19:50:45-0400"
+      },
+      {
+        "local_log_name": "offline-baseline-guard.jsonl",
+        "run_id": "a45ebbed-c2e4-4329-9fcd-351bd9d6b6ae",
+        "status": "abort",
+        "returncode": 255,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": "avd-error",
+        "idle": true,
+        "time": "2026-10-30T19:50:58-0400"
+      },
+      {
+        "local_log_name": "serialized-guard.jsonl",
+        "run_id": "343deca0-6272-4d14-a13e-8f31b5b3720e",
+        "status": "abort",
+        "returncode": 255,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": "avd-error",
+        "idle": true,
+        "time": "2026-10-30T19:56:15-0400"
+      },
+      {
+        "local_log_name": "gstreamer-guard.jsonl",
+        "run_id": "0d38b043-d493-4853-832c-bd6c67c3d491",
+        "status": "preflight-error",
+        "abort_reason": "existing decoder/kernel faults on this boot",
+        "time": "2026-10-30T19:56:29-0400"
+      },
+      {
+        "local_log_name": "gstreamer-guard2.jsonl",
+        "run_id": "877b8403-20f7-4ddf-8574-498a93e3dd71",
+        "status": "abort",
+        "returncode": -15,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": "avd-error",
+        "idle": true,
+        "time": "2026-10-30T19:56:54-0400"
+      },
+      {
+        "local_log_name": "synthetic-guard.jsonl",
+        "run_id": "8c4092f6-559a-40a6-ab0e-df7e094f153c",
+        "status": "ok",
+        "returncode": 0,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": null,
+        "idle": true,
+        "time": "2026-10-30T19:59:10-0400"
+      },
+      {
+        "local_log_name": "synthetic-aq-guard.jsonl",
+        "run_id": "1be515e9-fa56-4519-a93a-0aad367f3642",
+        "status": "ok",
+        "returncode": 0,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": null,
+        "idle": true,
+        "time": "2026-10-30T19:59:40-0400"
+      },
+      {
+        "local_log_name": "synthetic-loopoff-guard.jsonl",
+        "run_id": "22c085f3-6267-410c-b55d-2ac132dbf20e",
+        "status": "ok",
+        "returncode": 0,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": null,
+        "idle": true,
+        "time": "2026-10-30T20:00:39-0400"
+      },
+      {
+        "local_log_name": "synthetic-hq-guard.jsonl",
+        "run_id": "7990d25c-1fdf-4ab3-a009-a8d876e2586e",
+        "status": "ok",
+        "returncode": 0,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": null,
+        "idle": true,
+        "time": "2026-10-30T20:01:16-0400"
+      },
+      {
+        "local_log_name": "mac-trimmed-guard.jsonl",
+        "run_id": "4a0dc967-20be-4b87-bc8f-8053c9022756",
+        "status": "abort",
+        "returncode": 255,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": "foreign-client",
+        "idle": false,
+        "time": "2026-10-30T20:03:07-0400"
+      },
+      {
+        "local_log_name": "fixed-original-guard.jsonl",
+        "run_id": "6790093b-f49a-4c7e-aafc-c0f1c25a480c",
+        "status": "ok",
+        "returncode": 0,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": null,
+        "idle": true,
+        "time": "2026-10-30T20:12:35-0400"
+      },
+      {
+        "local_log_name": "live-fixed-guard.jsonl",
+        "run_id": "62a0005d-1be1-4af9-8a0f-0c7167d213d4",
+        "status": "ok",
+        "returncode": 0,
+        "timed_out": false,
+        "wedged": false,
+        "abort_reason": null,
+        "idle": true,
+        "time": "2026-10-30T20:15:26-0400"
+      }
+    ]
+  },
+  "limits": [
+    "Full HEVC conformance corpus and exact prior passing-vector sets were not rerun.",
+    "Selected hardware evidence is one M1 machine and one captured desktop stream; non-AVD hardware and other Apple chips were not tested.",
+    "Synthetic generic-backend coverage is control/payload testing, not hardware qualification.",
+    "First padding-stripped capture test matched all hashes but aborted for a foreign client; it is not counted as a clean hardware run. The later original-capture patched-driver run completed with an idle final state.",
+    "No new hardware campaign was run while preparing the draft PR.",
+    "No independent review yet. Package pins and support matrix are unchanged.",
+    "Private capture, frame hashes, credentials and unrelated logs are not published. Artifact digests and selected sanitized records identify the local evidence."
+  ]
+}
