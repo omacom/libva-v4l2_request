@@ -1,5 +1,7 @@
 option('driverdir', type: 'string', value: '',
        description: 'libva driver installation directory (defaults to the libva pkg-config driverdir)')
+option('vendor-string', type: 'string', value: 'omarchy-m1-video',
+       description: 'distribution name included in the VA vendor/version string')
 
 # Each stateless codec can be auto-detected from the kernel UAPI (default),
 # forced on (fails configuration when the UAPI is absent) or compiled out.

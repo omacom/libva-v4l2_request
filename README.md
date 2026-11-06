@@ -128,6 +128,11 @@ Six new offline cases bring the sanitizer suite to 35 cases. The lifetime bug is
 under ASan using an intercepted codec; it is an API misuse reproduction, not a demonstrated
 malicious-video exploit. Full VP9 inter-frame resize support still needs kernel-side work.
 
+Downstream builds after `1.3.r11` may set a diagnostic vendor name at configure
+time. Ten-bit HEVC, VP9 and AV1 capability reporting now also requires the
+matching decoder to expose a VA-exportable 10-bit CAPTURE format; AV1 Profile 0
+keeps its 8-bit RT format when 10-bit output is absent.
+
 Tested on an M1 (T8103) with the kernel patches from omarchy-m1-video: `JCT-VC-HEVC_V1` 144/147 and
 `JVT-AVC_V1` 73/135 bit-exact through FFmpeg VA-API. Earlier Chrome 152 H.264 playback tests
 matched software rendering; this revision adds direct early-export pixel regressions.
@@ -184,6 +189,9 @@ sudo meson install -C build
   `driverdir` variable (`pkg-config --variable=driverdir libva`; typically `/usr/lib/dri` or
   an arch-tripled `.../dri`). Override it at `meson setup` time with `-Ddriverdir=<path>`
   when packaging for a nonstandard prefix.
+- **Distribution identity**: packagers may set `-Dvendor-string=<name>` to replace the
+  distribution name in `vaQueryVendorString` while retaining the project version. This
+  changes diagnostics only; it does not change device discovery or codec behavior.
 - **Uninstalling**: `sudo ninja -C build uninstall` removes exactly the files `meson install`
   put down, including now-empty parent directories it created; nothing else under the
   prefix is touched.

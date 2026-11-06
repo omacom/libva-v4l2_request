@@ -51,6 +51,7 @@ codec_checks = {
 
 conf = configuration_data()
 conf.set_quoted('V4L2R_VERSION', meson.project_version())
+conf.set_quoted('V4L2R_VENDOR', get_option('vendor-string'))
 codec_report = []
 have_any_codec = false
 foreach codec, check : codec_checks

@@ -164,8 +164,12 @@ the resize checksums). Correct decode of those 27 resize/SVC streams remains ope
 
 `vaQueryConfigProfiles` can list the decode profiles compiled into this build
 when a decoder accepts the codec, plus `VAProfileNone` for VPP probing.
-High 10 is compiled when libva ≥ 1.18 and advertised only with
-`LIBVA_V4L2_H264_HIGH10` set and a 10-bit-capable decoder.
+Ten-bit-only profiles are listed only when that same decoder exposes a
+VA-exportable 10-bit CAPTURE format; HEVC and opt-in H.264 additionally have to
+accept a 10-bit SPS. High 10 is compiled when libva ≥ 1.18 and advertised only
+with `LIBVA_V4L2_H264_HIGH10` set. AV1 Profile 0 remains listed for an 8-bit
+decoder, but its `VA_RT_FORMAT_YUV420_10` attribute is omitted unless the AV1
+decoder also passed the 10-bit CAPTURE probe.
 
 | VA profile | Default advertised on AVD M1 | Contract row |
 |---|---|---|
@@ -174,13 +178,13 @@ High 10 is compiled when libva ≥ 1.18 and advertised only with
 | `VAProfileH264High` | yes | experimental progressive 8-bit 4:2:0 |
 | `VAProfileH264High10` | opt-in | experimental 10-bit 4:2:0 |
 | `VAProfileHEVCMain` | yes | experimental |
-| `VAProfileHEVCMain10` | yes | experimental |
+| `VAProfileHEVCMain10` | if the HEVC decoder passes its 10-bit SPS/P010 probe | experimental |
 | `VAProfileVP9Profile0` | yes | experimental |
-| `VAProfileVP9Profile2` | yes | experimental 10-bit 4:2:0 |
+| `VAProfileVP9Profile2` | if the VP9 decoder exposes P010 | experimental 10-bit 4:2:0 |
 | `VAProfileMPEG2Simple` | if the device exposes MPEG-2 | untested on AVD |
 | `VAProfileMPEG2Main` | if the device exposes MPEG-2 | untested on AVD |
 | `VAProfileVP8Version0_3` | if the device exposes VP8 | untested on AVD |
-| `VAProfileAV1Profile0` | if the device exposes AV1 | untested on AVD |
+| `VAProfileAV1Profile0` | if the device exposes AV1; 10-bit RT format only with P010 | untested on AVD |
 | `VAProfileNone` | always listed | VPP/converter untested on M1 |
 
 H.264 4:2:2, interlaced H.264, VP9 12-bit, VP9 4:2:2/4:4:4 and encode have

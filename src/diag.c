@@ -539,9 +539,12 @@ void v4l2r_diag_driver(const struct v4l2r_driver *drv)
 			    i ? "," : "");
 		json_string(line, sizeof(line), &pos, card);
 		json_append(line, sizeof(line), &pos, ",\"hevc_10bit\":%s,"
-			    "\"h264_10bit\":%s,\"formats\":[",
+			    "\"h264_10bit\":%s,\"vp9_10bit\":%s,"
+			    "\"av1_10bit\":%s,\"formats\":[",
 			    decoder->hevc_10bit ? "true" : "false",
-			    decoder->h264_10bit ? "true" : "false");
+			    decoder->h264_10bit ? "true" : "false",
+			    decoder->vp9_10bit ? "true" : "false",
+			    decoder->av1_10bit ? "true" : "false");
 		for (unsigned int j = 0; j < decoder->nb_pixelformats; j++) {
 			char fourcc[5];
 

@@ -253,21 +253,45 @@ static int devnode_from_devnum(uint32_t major, uint32_t minor, char *path,
 }
 
 /*
- * Ask the device whether it can decode 10-bit HEVC. There is no V4L2 query for
- * this and the raw CAPTURE formats do not distinguish 8- from 10-bit, so mirror
- * what the decode path does: select the HEVC coded format on the OUTPUT queue,
- * then set a 10-bit HEVC SPS with VIDIOC_S_EXT_CTRLS (no request). Devices that
- * cannot do 10-bit reject the bit depth in try_ctrl with EINVAL (e.g. cedrus on
- * the A64); capable devices accept it.
+ * Ask the device whether it can decode 10-bit HEVC. Select the HEVC coded
+ * format on the OUTPUT queue, set a 10-bit HEVC SPS with VIDIOC_S_EXT_CTRLS
+ * (no request), and require a VA-exportable 10-bit CAPTURE format. Devices
+ * that cannot do 10-bit reject the bit depth in try_ctrl with EINVAL (e.g.
+ * cedrus on the A64); a device exposing P010 for another codec alone is not
+ * enough.
  *
  * Selecting the coded format first matters: drivers dispatch control validation
  * per selected codec, and some (rkvdec) additionally reject an SPS whose picture
  * size exceeds the current OUTPUT format — so the SPS is sized to the dimensions
  * the device just accepted for the coded format.
  */
-#if HAVE_V4L2_CTRL_HEVC
-static bool video_device_probe_hevc_10bit(int fd, uint32_t output_type)
+static bool video_device_has_10bit_capture(int fd, uint32_t output_type)
 {
+#if HAVE_V4L2_PIX_FMT_P010
+	struct v4l2_fmtdesc capture = {
+		.type = V4L2_TYPE_IS_MULTIPLANAR(output_type) ?
+			V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE :
+			V4L2_BUF_TYPE_VIDEO_CAPTURE,
+	};
+
+	while (ioctl(fd, VIDIOC_ENUM_FMT, &capture) >= 0) {
+		const struct v4l2r_format_info *info =
+			v4l2r_format_by_pixelformat(capture.pixelformat);
+		if (info && info->bit_depth == 10 && info->va_fourcc &&
+		    info->rt_format == VA_RT_FORMAT_YUV420_10)
+			return true;
+		capture.index++;
+	}
+#else
+	(void)fd;
+	(void)output_type;
+#endif
+	return false;
+}
+
+bool v4l2r_probe_hevc_10bit(int fd, uint32_t output_type)
+{
+#if HAVE_V4L2_CTRL_HEVC
 	bool mplane = V4L2_TYPE_IS_MULTIPLANAR(output_type);
 	struct v4l2_format format = { .type = output_type };
 	struct v4l2_ctrl_hevc_sps sps = {
@@ -300,7 +324,8 @@ static bool video_device_probe_hevc_10bit(int fd, uint32_t output_type)
 		format.fmt.pix.pixelformat = V4L2_PIX_FMT_HEVC_SLICE;
 	}
 
-	if (ioctl(fd, VIDIOC_S_FMT, &format) < 0)
+	if (ioctl(fd, VIDIOC_S_FMT, &format) < 0 ||
+	    v4l2r_format_pixelformat(&format) != V4L2_PIX_FMT_HEVC_SLICE)
 		return false;
 
 	/* Size the SPS to what the device accepted; some drivers reject an SPS
@@ -313,9 +338,112 @@ static bool video_device_probe_hevc_10bit(int fd, uint32_t output_type)
 		sps.pic_height_in_luma_samples = format.fmt.pix.height;
 	}
 
-	return ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) == 0;
-}
+	return ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) == 0 &&
+	       video_device_has_10bit_capture(fd, output_type);
+#else
+	(void)fd;
+	(void)output_type;
 #endif
+	return false;
+}
+
+bool v4l2r_probe_vp9_10bit(int fd, uint32_t output_type)
+{
+#if HAVE_V4L2_CTRL_VP9
+	bool mplane = V4L2_TYPE_IS_MULTIPLANAR(output_type);
+	struct v4l2_format format = { .type = output_type };
+	struct v4l2_ctrl_vp9_frame frame = {
+		.flags = V4L2_VP9_FRAME_FLAG_X_SUBSAMPLING |
+			 V4L2_VP9_FRAME_FLAG_Y_SUBSAMPLING,
+		.frame_width_minus_1 = 1919,
+		.frame_height_minus_1 = 1087,
+		.render_width_minus_1 = 1919,
+		.render_height_minus_1 = 1087,
+		.profile = 2,
+		.bit_depth = 10,
+	};
+	struct v4l2_ext_control control = {
+		.id = V4L2_CID_STATELESS_VP9_FRAME,
+		.ptr = &frame,
+		.size = sizeof(frame),
+	};
+	struct v4l2_ext_controls controls = {
+		.count = 1,
+		.controls = &control,
+	};
+
+	if (mplane) {
+		format.fmt.pix_mp.width = 1920;
+		format.fmt.pix_mp.height = 1088;
+		format.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_VP9_FRAME;
+		format.fmt.pix_mp.num_planes = 1;
+	} else {
+		format.fmt.pix.width = 1920;
+		format.fmt.pix.height = 1088;
+		format.fmt.pix.pixelformat = V4L2_PIX_FMT_VP9_FRAME;
+	}
+
+	if (ioctl(fd, VIDIOC_S_FMT, &format) < 0 ||
+	    v4l2r_format_pixelformat(&format) != V4L2_PIX_FMT_VP9_FRAME)
+		return false;
+	if (ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) < 0)
+		return false;
+
+	return video_device_has_10bit_capture(fd, output_type);
+#else
+	(void)fd;
+	(void)output_type;
+#endif
+	return false;
+}
+
+bool v4l2r_probe_av1_10bit(int fd, uint32_t output_type)
+{
+#if HAVE_V4L2_CTRL_AV1
+	bool mplane = V4L2_TYPE_IS_MULTIPLANAR(output_type);
+	struct v4l2_format format = { .type = output_type };
+	struct v4l2_ctrl_av1_sequence sequence = {
+		.flags = V4L2_AV1_SEQUENCE_FLAG_SUBSAMPLING_X |
+			 V4L2_AV1_SEQUENCE_FLAG_SUBSAMPLING_Y,
+		.seq_profile = 0,
+		.bit_depth = 10,
+		.max_frame_width_minus_1 = 1919,
+		.max_frame_height_minus_1 = 1087,
+	};
+	struct v4l2_ext_control control = {
+		.id = V4L2_CID_STATELESS_AV1_SEQUENCE,
+		.ptr = &sequence,
+		.size = sizeof(sequence),
+	};
+	struct v4l2_ext_controls controls = {
+		.count = 1,
+		.controls = &control,
+	};
+
+	if (mplane) {
+		format.fmt.pix_mp.width = 1920;
+		format.fmt.pix_mp.height = 1088;
+		format.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_AV1_FRAME;
+		format.fmt.pix_mp.num_planes = 1;
+	} else {
+		format.fmt.pix.width = 1920;
+		format.fmt.pix.height = 1088;
+		format.fmt.pix.pixelformat = V4L2_PIX_FMT_AV1_FRAME;
+	}
+
+	if (ioctl(fd, VIDIOC_S_FMT, &format) < 0 ||
+	    v4l2r_format_pixelformat(&format) != V4L2_PIX_FMT_AV1_FRAME)
+		return false;
+	if (ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) < 0)
+		return false;
+
+	return video_device_has_10bit_capture(fd, output_type);
+#else
+	(void)fd;
+	(void)output_type;
+#endif
+	return false;
+}
 
 bool v4l2r_probe_h264_10bit(int fd, uint32_t output_type)
 {
@@ -336,10 +464,6 @@ bool v4l2r_probe_h264_10bit(int fd, uint32_t output_type)
 		.id = V4L2_CID_STATELESS_H264_SPS, .ptr = &sps, .size = sizeof(sps),
 	};
 	struct v4l2_ext_controls controls = { .count = 1, .controls = &control };
-	struct v4l2_fmtdesc capture = {
-		.type = mplane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE :
-				 V4L2_BUF_TYPE_VIDEO_CAPTURE,
-	};
 	if (mplane) {
 		format.fmt.pix_mp.width = 1920;
 		format.fmt.pix_mp.height = 1088;
@@ -363,14 +487,7 @@ bool v4l2r_probe_h264_10bit(int fd, uint32_t output_type)
 		return false;
 	/* Require usable 10-bit output as well as an accepted SPS. An 8-bit
 	 * fallback would silently discard the extra precision. */
-	while (ioctl(fd, VIDIOC_ENUM_FMT, &capture) >= 0) {
-		const struct v4l2r_format_info *info =
-			v4l2r_format_by_pixelformat(capture.pixelformat);
-		if (info && info->bit_depth == 10 && info->va_fourcc &&
-		    info->rt_format == VA_RT_FORMAT_YUV420_10)
-			return true;
-		capture.index++;
-	}
+	return video_device_has_10bit_capture(fd, output_type);
 #else
 	(void)fd;
 	(void)output_type;
@@ -430,16 +547,26 @@ static bool video_device_is_request_decoder(const char *path,
 
 	decoder->hevc_10bit = false;
 	decoder->h264_10bit = false;
+	decoder->vp9_10bit = false;
+	decoder->av1_10bit = false;
 	for (unsigned int i = 0; i < decoder->nb_pixelformats; i++) {
 #if HAVE_V4L2_CTRL_HEVC
 		if (decoder->pixelformats[i] == V4L2_PIX_FMT_HEVC_SLICE) {
 			decoder->hevc_10bit =
-				video_device_probe_hevc_10bit(fd, output_type);
+				v4l2r_probe_hevc_10bit(fd, output_type);
 		}
 #endif
 #if HAVE_V4L2_CTRL_H264
 		if (decoder->pixelformats[i] == V4L2_PIX_FMT_H264_SLICE)
 			decoder->h264_10bit = v4l2r_probe_h264_10bit(fd, output_type);
+#endif
+#if HAVE_V4L2_CTRL_VP9
+		if (decoder->pixelformats[i] == V4L2_PIX_FMT_VP9_FRAME)
+			decoder->vp9_10bit = v4l2r_probe_vp9_10bit(fd, output_type);
+#endif
+#if HAVE_V4L2_CTRL_AV1
+		if (decoder->pixelformats[i] == V4L2_PIX_FMT_AV1_FRAME)
+			decoder->av1_10bit = v4l2r_probe_av1_10bit(fd, output_type);
 #endif
 	}
 
@@ -661,28 +788,47 @@ bool v4l2r_converter_supports(struct v4l2r_driver *drv, uint32_t pixelformat)
 	return false;
 }
 
+static bool decoder_supports_pixelformat(const struct v4l2r_decoder *decoder,
+					 uint32_t pixelformat)
+{
+	for (unsigned int i = 0; i < decoder->nb_pixelformats; i++)
+		if (decoder->pixelformats[i] == pixelformat)
+			return true;
+
+	return false;
+}
+
 static bool driver_supports_pixelformat(struct v4l2r_driver *drv,
 					uint32_t pixelformat)
 {
 	for (unsigned int i = 0; i < drv->nb_decoders; i++) {
-		for (unsigned int j = 0; j < drv->decoders[i].nb_pixelformats; j++) {
-			if (drv->decoders[i].pixelformats[j] == pixelformat)
-				return true;
-		}
+		if (decoder_supports_pixelformat(&drv->decoders[i], pixelformat))
+			return true;
 	}
 
 	return false;
 }
 
-/* Whether some decoder can decode 10-bit HEVC. */
-static bool driver_supports_hevc_10bit(struct v4l2r_driver *drv)
+bool v4l2r_decoder_supports_profile(const struct v4l2r_decoder *decoder,
+				    VAProfile profile)
 {
-	for (unsigned int i = 0; i < drv->nb_decoders; i++) {
-		if (drv->decoders[i].hevc_10bit)
-			return true;
-	}
+	const struct v4l2r_codec *codec = v4l2r_codec_for_profile(profile);
 
-	return false;
+	if (!codec || !decoder_supports_pixelformat(decoder, codec->pixelformat))
+		return false;
+
+	switch (profile) {
+#if VA_CHECK_VERSION(1, 18, 0)
+	case VAProfileH264High10:
+		return decoder->h264_10bit;
+#endif
+	case VAProfileHEVCMain10:
+		return decoder->hevc_10bit;
+	case VAProfileVP9Profile2:
+		return decoder->vp9_10bit;
+	default:
+		return true;
+	}
 }
 
 /*
@@ -693,26 +839,45 @@ static bool driver_supports_hevc_10bit(struct v4l2r_driver *drv)
  */
 static bool driver_supports_profile(struct v4l2r_driver *drv, VAProfile profile)
 {
-	const struct v4l2r_codec *codec = v4l2r_codec_for_profile(profile);
-
-	if (!codec || !driver_supports_pixelformat(drv, codec->pixelformat))
-		return false;
-
-	if (profile == VAProfileHEVCMain10 && !driver_supports_hevc_10bit(drv))
-		return false;
-
 #if VA_CHECK_VERSION(1, 18, 0)
-	if (profile == VAProfileH264High10) {
-		if (drv->h264_high10 == V4L2R_H264_HIGH10_OFF)
-			return false;
-		for (unsigned int i = 0; i < drv->nb_decoders; i++)
-			if (drv->decoders[i].h264_10bit)
-				return true;
+	if (profile == VAProfileH264High10 &&
+	    drv->h264_high10 == V4L2R_H264_HIGH10_OFF)
 		return false;
+#endif
+
+	for (unsigned int i = 0; i < drv->nb_decoders; i++)
+		if (v4l2r_decoder_supports_profile(&drv->decoders[i], profile))
+			return true;
+
+	return false;
+}
+
+static unsigned int driver_profile_rt_format(struct v4l2r_driver *drv,
+					     VAProfile profile)
+{
+	unsigned int rt_format = v4l2r_profile_rt_format(profile);
+
+	/* AV1 Profile 0 includes both 8- and 10-bit 4:2:0. Keep the profile
+	 * available for 8-bit decoders, but only offer the 10-bit RT format when
+	 * the same decoder exposes a VA-exportable 10-bit CAPTURE format. */
+#if HAVE_V4L2_CTRL_AV1
+	if (profile == VAProfileAV1Profile0) {
+		bool ten_bit = false;
+
+		for (unsigned int i = 0; i < drv->nb_decoders; i++) {
+			if (decoder_supports_pixelformat(&drv->decoders[i],
+						     V4L2_PIX_FMT_AV1_FRAME) &&
+			    drv->decoders[i].av1_10bit) {
+				ten_bit = true;
+				break;
+			}
+		}
+		if (!ten_bit)
+			rt_format &= ~VA_RT_FORMAT_YUV420_10;
 	}
 #endif
 
-	return true;
+	return rt_format;
 }
 
 /* --- config --- */
@@ -839,7 +1004,7 @@ VAStatus v4l2r_CreateConfig(VADriverContextP va_ctx, VAProfile profile,
 	config->profile = profile;
 	config->entrypoint = entrypoint;
 	config->codec = codec;
-	config->rt_format = v4l2r_profile_rt_format(profile);
+	config->rt_format = driver_profile_rt_format(drv, profile);
 
 	config->attributes[0].type = VAConfigAttribRTFormat;
 	config->attributes[0].value = config->rt_format;
@@ -920,7 +1085,8 @@ VAStatus v4l2r_GetConfigAttributes(VADriverContextP va_ctx, VAProfile profile,
 				   VAEntrypoint entrypoint,
 				   VAConfigAttrib *attrib_list, int num_attribs)
 {
-	(void)va_ctx;
+	struct v4l2r_driver *drv = v4l2r_driver(va_ctx);
+
 	(void)entrypoint;
 
 	if (num_attribs < 0 || (num_attribs && !attrib_list))
@@ -929,7 +1095,7 @@ VAStatus v4l2r_GetConfigAttributes(VADriverContextP va_ctx, VAProfile profile,
 	for (int i = 0; i < num_attribs; i++) {
 		switch (attrib_list[i].type) {
 		case VAConfigAttribRTFormat:
-			attrib_list[i].value = v4l2r_profile_rt_format(profile);
+			attrib_list[i].value = driver_profile_rt_format(drv, profile);
 			break;
 		default:
 			attrib_list[i].value = VA_ATTRIB_NOT_SUPPORTED;

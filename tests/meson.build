@@ -27,6 +27,15 @@ if conf.get('HAVE_V4L2_CTRL_VP9') == 1
     test('dimensions-' + case, dimensions, args: [case], timeout: 15)
   endforeach
 endif
+
+if conf.get('HAVE_V4L2_CTRL_HEVC') == 1 or conf.get('HAVE_V4L2_CTRL_VP9') == 1 or conf.get('HAVE_V4L2_CTRL_AV1') == 1
+  profile_capability = executable('profile-capability', 'profile-capability.c', driver_sources,
+    c_args: ['-UNDEBUG'],
+    include_directories: [root_inc, include_directories('../src')],
+    dependencies: [libva_dep, libdrm_dep, threads_dep],
+    link_args: ['-Wl,--wrap=ioctl'])
+  test('profile-capability', profile_capability, timeout: 30)
+endif
 foreach case : ['control', 'capture-queue', 'request-queue', 'dequeue-error', 'poll-interrupted',
                 'converter-error-flag', 'converter-source-error', 'converter-export-error',
                 'sweep-create', 'sweep-create-single', 'sweep-decode', 'sweep-decode-early',

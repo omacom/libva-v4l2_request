@@ -55,7 +55,7 @@ static inline uint64_t v4l2r_now_ns(void)
 #define V4L2R_MAX_IMAGE_FORMATS		8
 #define V4L2R_MAX_SUBPIC_FORMATS	1
 #define V4L2R_MAX_DISPLAY_ATTRIBUTES	1
-#define V4L2R_STR_VENDOR		"v4l2-request (omarchy-m1-video " V4L2R_VERSION ")"
+#define V4L2R_STR_VENDOR		"v4l2-request (" V4L2R_VENDOR " " V4L2R_VERSION ")"
 
 #define V4L2R_MAX_DECODERS		8
 #define V4L2R_MAX_PIXELFORMATS		16
@@ -202,11 +202,13 @@ struct v4l2r_decoder {
 	char card[32];
 	uint32_t pixelformats[V4L2R_MAX_PIXELFORMATS];
 	unsigned int nb_pixelformats;
-	/* Whether this decoder accepts a 10-bit HEVC SPS. Not every HEVC-capable
-	 * device can do 10-bit (e.g. Allwinner A64 lacks it), and the kernel only
-	 * rejects it at decode time, so probe it up front and gate Main10. */
+	/* Per-codec 10-bit control and VA-exportable CAPTURE probes. Not every
+	 * codec-capable device supports its 10-bit profile, so gate it before a
+	 * client chooses VA-API and starts decoding. */
 	bool hevc_10bit;
 	bool h264_10bit;
+	bool vp9_10bit;
+	bool av1_10bit;
 };
 
 /*
@@ -517,6 +519,11 @@ enum v4l2r_h264_high10_mode {
 };
 
 bool v4l2r_probe_h264_10bit(int fd, uint32_t output_type);
+bool v4l2r_probe_hevc_10bit(int fd, uint32_t output_type);
+bool v4l2r_probe_vp9_10bit(int fd, uint32_t output_type);
+bool v4l2r_probe_av1_10bit(int fd, uint32_t output_type);
+bool v4l2r_decoder_supports_profile(const struct v4l2r_decoder *decoder,
+				    VAProfile profile);
 
 /* --- in-driver concurrency instrumentation (api.c); issue #36, AC2 ---
  *
