@@ -225,6 +225,8 @@ static void picture(unsigned int target, unsigned int type, unsigned int hint)
     slice.slice_data_size = sizeof(tiles);
 }
 
+static bool data_first;
+
 static VAStatus assemble(void)
 {
     struct v4l2r_surface *target = V4L2R_SURFACE_GET(&drv, pic.current_frame);
@@ -236,16 +238,12 @@ static VAStatus assemble(void)
     buf = (struct v4l2r_buffer) { .type = VAPictureParameterBufferType,
         .data = &pic, .nb_elements = 1, .element_size = sizeof(pic) };
     status = av1_render_buffer(ctx, &buf);
-    if (status == VA_STATUS_SUCCESS) {
-        buf = (struct v4l2r_buffer) { .type = VASliceParameterBufferType,
-            .data = &slice, .nb_elements = 1, .element_size = sizeof(slice) };
-        status = av1_render_buffer(ctx, &buf);
-    }
-    if (status == VA_STATUS_SUCCESS) {
-        buf = (struct v4l2r_buffer) { .type = VASliceDataBufferType,
-            .data = tiles, .nb_elements = 1, .element_size = sizeof(tiles) };
-        status = av1_render_buffer(ctx, &buf);
-    }
+    struct v4l2r_buffer pair[2] = {
+      { .type = VASliceParameterBufferType, .data = &slice, .nb_elements = 1, .element_size = sizeof(slice) },
+      { .type = VASliceDataBufferType, .data = tiles, .nb_elements = 1, .element_size = sizeof(tiles) },
+    };
+    for (unsigned int i = 0; i < 2 && status == VA_STATUS_SUCCESS; i++)
+      status = av1_render_buffer(ctx, &pair[data_first ? 1-i : i]);
     if (status == VA_STATUS_SUCCESS)
         status = av1_end_picture(ctx);
     ctx->in_picture = false;
@@ -377,6 +375,80 @@ static void gate_case(const char *name, FILE *sink)
     assert(count == (gate_expected ? 32u : 0u));
 }
 
+/* AVD mode: every frame is queued at EndPicture, so the last frame of a
+ * stream is decoded without a later frame or a vaSyncSurface (Chrome). */
+/* Spec 5.9.15 uniform layout for TileColsLog2 = k. */
+static unsigned int spec_uniform(unsigned int sb, unsigned int k, uint32_t *starts,
+                                 uint32_t *minus1, unsigned int shift)
+{
+    unsigned int w = (sb + (1u << k) - 1) >> k, n = 0;
+    for (unsigned int s0 = 0; s0 < sb; s0 += w, n++) {
+        starts[n] = s0 << shift;
+        minus1[n] = (sb - s0 < w ? sb - s0 : w) - 1;
+    }
+    return n;
+}
+
+static void tile_dims_case(void)
+{
+    uint32_t st[65], m1[64], es[65], em[64];
+    uint16_t va[63] = { 0 };
+    unsigned int checked = 0;
+
+    /* Uniform: every SB count and log2 the spec allows (<= 64 tiles) must
+     * reproduce the spec layout from the tile count alone. */
+    for (unsigned int shift = 4; shift <= 5; shift++)
+        for (unsigned int sb = 1; sb <= 1024; sb++)
+            for (unsigned int k = 0; k <= 6; k++) {
+                unsigned int n = spec_uniform(sb, k, es, em, shift);
+                if (n > 64)
+                    continue;
+                memset(st, 0xff, sizeof(st));
+                memset(m1, 0xff, sizeof(m1));
+                assert(av1_tile_dims(n, sb, true, va, shift, 0, st, m1));
+                assert(!memcmp(st, es, n * sizeof(*st)) && !memcmp(m1, em, n * sizeof(*m1)));
+                checked++;
+            }
+    assert(checked > 10000);
+    /* Chrome's 640x360 case: zero VA arrays, one uniform tile -> 10x6 SBs. */
+    assert(av1_tile_dims(1, 10, true, va, 4, 64, st, m1) && st[0] == 0 && m1[0] == 9);
+    assert(av1_tile_dims(1, 6, true, va, 4, 0, st, m1) && m1[0] == 5);
+    /* Uniform wider than MAX_TILE_WIDTH (64 SBs of 64 px) is rejected. */
+    assert(!av1_tile_dims(1, 65, true, va, 4, 64, st, m1));
+    /* Uniform count with no matching layout is rejected. */
+    assert(!av1_tile_dims(3, 4, true, va, 4, 0, st, m1));
+    /* Non-uniform: VA sizes except the last, which is derived. */
+    va[0] = 3; va[1] = 1; va[2] = 50;   /* va[2] (last) must be ignored */
+    assert(av1_tile_dims(3, 10, false, va, 4, 64, st, m1));
+    assert(m1[0] == 3 && m1[1] == 1 && m1[2] == 3 && st[1] == (4u << 4) && st[2] == (6u << 4));
+    /* Non-uniform zero-width last tile, overrun and oversize are rejected. */
+    va[0] = 9;
+    assert(!av1_tile_dims(2, 10, false, va, 4, 0, st, m1));
+    va[0] = 10;
+    assert(!av1_tile_dims(2, 10, false, va, 4, 0, st, m1));
+    va[0] = 2;
+    assert(!av1_tile_dims(2, 10, false, va, 4, 4, st, m1));
+    /* 64 tiles read exactly the 63 VA entries. */
+    for (unsigned int i = 0; i < 63; i++) va[i] = 0;
+    assert(av1_tile_dims(64, 64, false, va, 4, 0, st, m1) && m1[63] == 0 && st[63] == (63u << 4));
+    assert(!av1_tile_dims(65, 65, false, va, 4, 0, st, m1));
+}
+
+static void immediate_case(void)
+{
+    ctx->av1_submit_at_end = true;
+    picture(0, 0, 0);
+    assert(assemble() == VA_STATUS_SUCCESS && requests_queued == 1);
+    assert(!codec.pend_valid);
+    picture(1, 1, 4);
+    pic.ref_frame_map[0] = sid[0];
+    pic.primary_ref_frame = 0;
+    assert(assemble() == VA_STATUS_SUCCESS && requests_queued == 2);
+    assert(!codec.pend_valid);
+    assert(av1_flush(ctx, NULL) == VA_STATUS_SUCCESS && requests_queued == 2);
+    ctx->av1_submit_at_end = false;
+}
+
 int main(int argc, char **argv)
 {
     char text[32768], match[256], log_path[4096];
@@ -398,6 +470,23 @@ int main(int argc, char **argv)
         assert(!unsetenv("LIBVA_V4L2_TRACE"));
     assert(dup2(fileno(sink), STDERR_FILENO) == STDERR_FILENO);
     setup();
+    if (!strncmp(argv[1], "data-first-", 11)) { data_first = true; argv[1] += 11; }
+    if (!strcmp(argv[1], "tile-dims")) {
+        tile_dims_case();
+        teardown();
+        log_reset();
+        fclose(sink);
+        printf("PASS tile-dims trace=%s uniform/non-uniform AV1 tile geometry\n", argv[2]);
+        return 0;
+    }
+    if (!strcmp(argv[1], "immediate")) {
+        immediate_case();
+        teardown();
+        log_reset();
+        fclose(sink);
+        printf("PASS immediate trace=%s AV1 frames queued at EndPicture\n", argv[2]);
+        return 0;
+    }
     if (!strncmp(argv[1], "required-", 9) || !strcmp(argv[1], "primary-bounds") ||
         !strcmp(argv[1], "slot-bounds") || !strcmp(argv[1], "valid-primary") ||
         !strcmp(argv[1], "key-default") || !strcmp(argv[1], "intra-default") ||
