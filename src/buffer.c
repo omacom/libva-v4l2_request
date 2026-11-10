@@ -37,6 +37,13 @@ VAStatus v4l2r_CreateBuffer(VADriverContextP va_ctx, VAContextID context_id,
 	case VAProbabilityBufferType:
 	case VAImageBufferType:
 	case VAProcPipelineParameterBufferType:
+	case VAEncSequenceParameterBufferType:
+	case VAEncPictureParameterBufferType:
+	case VAEncSliceParameterBufferType:
+	case VAEncMiscParameterBufferType:
+	case VAEncPackedHeaderParameterBufferType:
+	case VAEncPackedHeaderDataBufferType:
+	case VAEncCodedBufferType:
 		break;
 	default:
 		return VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE;
@@ -59,6 +66,30 @@ VAStatus v4l2r_CreateBuffer(VADriverContextP va_ctx, VAContextID context_id,
 	buffer->type = type;
 	buffer->element_size = size;
 	buffer->nb_elements = num_elements;
+
+	/* A coded buffer maps to a VACodedBufferSegment list: keep the one
+	 * segment in front of the data the encoder writes (encode.c). */
+	if (type == VAEncCodedBufferType) {
+		if ((size_t)size * num_elements > SIZE_MAX - sizeof(VACodedBufferSegment)) {
+			pthread_mutex_lock(&drv->mutex);
+			v4l2r_handles_free(&drv->buffers, id);
+			pthread_mutex_unlock(&drv->mutex);
+			return VA_STATUS_ERROR_ALLOCATION_FAILED;
+		}
+		buffer->element_size = size * num_elements + sizeof(VACodedBufferSegment);
+		buffer->nb_elements = 1;
+		buffer->data = calloc(1, buffer->element_size);
+		if (!buffer->data) {
+			pthread_mutex_lock(&drv->mutex);
+			v4l2r_handles_free(&drv->buffers, id);
+			pthread_mutex_unlock(&drv->mutex);
+			return VA_STATUS_ERROR_ALLOCATION_FAILED;
+		}
+		((VACodedBufferSegment *)buffer->data)->buf =
+			(uint8_t *)buffer->data + sizeof(VACodedBufferSegment);
+		*buf_id = id;
+		return VA_STATUS_SUCCESS;
+	}
 
 	buffer->data = malloc((size_t)size * num_elements);
 	if (!buffer->data) {

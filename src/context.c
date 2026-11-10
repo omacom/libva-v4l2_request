@@ -1124,6 +1124,14 @@ VAStatus v4l2r_CreateContext(VADriverContextP va_ctx, VAConfigID config_id,
 
 	/* Video processing contexts drive the format converter instead of a
 	 * decoder: no codec, no decoder device, no queues. */
+	if (config->entrypoint == VAEntrypointEncSlice) {
+		status = v4l2r_enc_create(ctx, config);
+		if (status != VA_STATUS_SUCCESS)
+			goto fail;
+
+		*context_id = id;
+		return VA_STATUS_SUCCESS;
+	}
 	if (!ctx->codec) {
 		status = v4l2r_vpp_create(ctx);
 		if (status != VA_STATUS_SUCCESS)
@@ -1385,6 +1393,7 @@ VAStatus v4l2r_DestroyContext(VADriverContextP va_ctx, VAContextID context_id)
 
 	v4l2r_convert_destroy(ctx);
 	v4l2r_vpp_destroy(ctx);
+	v4l2r_enc_destroy(ctx);
 
 	for (unsigned int i = 0; i < V4L2R_OUTPUT_BUFFERS; i++)
 		output_buffer_cleanup(ctx, &ctx->output[i]);
@@ -1471,7 +1480,9 @@ VAStatus v4l2r_BeginPicture(VADriverContextP va_ctx, VAContextID context_id,
 	}
 
 	ctx->picture_status = VA_STATUS_SUCCESS;
-	if (ctx->vpp) {
+	if (ctx->enc) {
+		status = v4l2r_enc_begin_picture(ctx, surface);
+	} else if (ctx->vpp) {
 		status = v4l2r_vpp_begin_picture(ctx, surface);
 	} else {
 		status = v4l2r_picture_begin(ctx, surface);
@@ -1525,7 +1536,8 @@ VAStatus v4l2r_RenderPicture(VADriverContextP va_ctx, VAContextID context_id,
 			return ctx->picture_status;
 		}
 
-		status = ctx->vpp ? v4l2r_vpp_render_buffer(ctx, buffer) :
+		status = ctx->enc ? v4l2r_enc_render_buffer(ctx, buffer) :
+			 ctx->vpp ? v4l2r_vpp_render_buffer(ctx, buffer) :
 			 ctx->codec->render_buffer(ctx, buffer);
 		if (status != VA_STATUS_SUCCESS) {
 			ctx->picture_status = status;
@@ -1553,7 +1565,8 @@ VAStatus v4l2r_EndPicture(VADriverContextP va_ctx, VAContextID context_id)
 
 	status = ctx->picture_status;
 	if (status == VA_STATUS_SUCCESS)
-		status = ctx->vpp ? v4l2r_vpp_end_picture(ctx) :
+		status = ctx->enc ? v4l2r_enc_end_picture(ctx) :
+			 ctx->vpp ? v4l2r_vpp_end_picture(ctx) :
 			 ctx->codec->end_picture(ctx);
 	if (status != VA_STATUS_SUCCESS && ctx->pic.target) {
 		ctx->pic.target->decode_status = status;

@@ -775,11 +775,12 @@ VAStatus v4l2r_QueryConfigEntrypoints(VADriverContextP va_ctx, VAProfile profile
 		if (v4l2r_converter_available(drv))
 			entrypoints[(*num_entrypoints)++] =
 				VAEntrypointVideoProc;
-	} else if (codec && driver_supports_profile(drv, profile)) {
-		entrypoints[0] = VAEntrypointVLD;
-		*num_entrypoints = 1;
 	} else {
 		*num_entrypoints = 0;
+		if (codec && driver_supports_profile(drv, profile))
+			entrypoints[(*num_entrypoints)++] = VAEntrypointVLD;
+		if (v4l2r_encoder_supports(drv, profile))
+			entrypoints[(*num_entrypoints)++] = VAEntrypointEncSlice;
 	}
 
 	return VA_STATUS_SUCCESS;
@@ -808,6 +809,15 @@ VAStatus v4l2r_CreateConfig(VADriverContextP va_ctx, VAProfile profile,
 				   vaEntrypointStr(entrypoint),
 				   vaProfileStr(profile));
 			return VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
+		}
+	} else if (entrypoint == VAEntrypointEncSlice) {
+		/* Encoding runs on the stateful encoder; no decode codec. */
+		if (!v4l2r_encoder_supports(drv, profile)) {
+			v4l2r_diag(NULL, V4L2R_DIAG_LEVEL_DEBUG,
+				   V4L2R_DIAG_UNSUPPORTED, "create-config", 0,
+				   "profile %s has no encoder",
+				   vaProfileStr(profile));
+			return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
 		}
 	} else {
 		codec = v4l2r_codec_for_profile(profile);
@@ -921,10 +931,16 @@ VAStatus v4l2r_GetConfigAttributes(VADriverContextP va_ctx, VAProfile profile,
 				   VAConfigAttrib *attrib_list, int num_attribs)
 {
 	(void)va_ctx;
-	(void)entrypoint;
 
 	if (num_attribs < 0 || (num_attribs && !attrib_list))
 		return VA_STATUS_ERROR_INVALID_PARAMETER;
+
+	if (entrypoint == VAEntrypointEncSlice) {
+		for (int i = 0; i < num_attribs; i++)
+			attrib_list[i].value =
+				v4l2r_encoder_attribute(profile, attrib_list[i].type);
+		return VA_STATUS_SUCCESS;
+	}
 
 	for (int i = 0; i < num_attribs; i++) {
 		switch (attrib_list[i].type) {
