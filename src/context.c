@@ -1161,6 +1161,7 @@ VAStatus v4l2r_CreateContext(VADriverContextP va_ctx, VAConfigID config_id,
 		if (ioctl(ctx->video_fd, VIDIOC_QUERYCAP, &capability) < 0)
 			goto next;
 		ctx->is_avd = !strcmp((const char *)capability.driver, "avd");
+		ctx->av1_submit_at_end = ctx->is_avd;
 
 		capabilities = (capability.capabilities & V4L2_CAP_DEVICE_CAPS) ?
 			       capability.device_caps : capability.capabilities;

@@ -225,6 +225,8 @@ static void picture(unsigned int target, unsigned int type, unsigned int hint)
     slice.slice_data_size = sizeof(tiles);
 }
 
+static bool data_first;
+
 static VAStatus assemble(void)
 {
     struct v4l2r_surface *target = V4L2R_SURFACE_GET(&drv, pic.current_frame);
@@ -236,16 +238,12 @@ static VAStatus assemble(void)
     buf = (struct v4l2r_buffer) { .type = VAPictureParameterBufferType,
         .data = &pic, .nb_elements = 1, .element_size = sizeof(pic) };
     status = av1_render_buffer(ctx, &buf);
-    if (status == VA_STATUS_SUCCESS) {
-        buf = (struct v4l2r_buffer) { .type = VASliceParameterBufferType,
-            .data = &slice, .nb_elements = 1, .element_size = sizeof(slice) };
-        status = av1_render_buffer(ctx, &buf);
-    }
-    if (status == VA_STATUS_SUCCESS) {
-        buf = (struct v4l2r_buffer) { .type = VASliceDataBufferType,
-            .data = tiles, .nb_elements = 1, .element_size = sizeof(tiles) };
-        status = av1_render_buffer(ctx, &buf);
-    }
+    struct v4l2r_buffer pair[2] = {
+      { .type = VASliceParameterBufferType, .data = &slice, .nb_elements = 1, .element_size = sizeof(slice) },
+      { .type = VASliceDataBufferType, .data = tiles, .nb_elements = 1, .element_size = sizeof(tiles) },
+    };
+    for (unsigned int i = 0; i < 2 && status == VA_STATUS_SUCCESS; i++)
+      status = av1_render_buffer(ctx, &pair[data_first ? 1-i : i]);
     if (status == VA_STATUS_SUCCESS)
         status = av1_end_picture(ctx);
     ctx->in_picture = false;
@@ -377,6 +375,225 @@ static void gate_case(const char *name, FILE *sink)
     assert(count == (gate_expected ? 32u : 0u));
 }
 
+/* AVD mode: every frame is queued at EndPicture, so the last frame of a
+ * stream is decoded without a later frame or a vaSyncSurface (Chrome). */
+/* Spec 5.9.15 uniform layout for TileColsLog2 = k. */
+static unsigned int spec_uniform(unsigned int sb, unsigned int k, uint32_t *starts,
+                                 uint32_t *minus1, unsigned int shift)
+{
+    unsigned int w = (sb + (1u << k) - 1) >> k, n = 0;
+    for (unsigned int s0 = 0; s0 < sb; s0 += w, n++) {
+        starts[n] = s0 << shift;
+        minus1[n] = (sb - s0 < w ? sb - s0 : w) - 1;
+    }
+    return n;
+}
+
+static void tile_dims_case(void)
+{
+    uint32_t st[65], m1[64], es[65], em[64];
+    uint16_t va[63] = { 0 };
+    unsigned int checked = 0;
+
+    /* Uniform: every SB count and log2 the spec allows (<= 64 tiles) must
+     * reproduce the spec layout from the tile count alone. */
+    for (unsigned int shift = 4; shift <= 5; shift++)
+        for (unsigned int sb = 1; sb <= 1024; sb++)
+            for (unsigned int k = 0; k <= 6; k++) {
+                unsigned int n = spec_uniform(sb, k, es, em, shift);
+                if (n > 64)
+                    continue;
+                memset(st, 0xff, sizeof(st));
+                memset(m1, 0xff, sizeof(m1));
+                assert(av1_tile_dims(n, sb, true, va, shift, 0, st, m1));
+                assert(!memcmp(st, es, n * sizeof(*st)) && !memcmp(m1, em, n * sizeof(*m1)));
+                checked++;
+            }
+    assert(checked > 10000);
+    /* Chrome's 640x360 case: zero VA arrays, one uniform tile -> 10x6 SBs. */
+    assert(av1_tile_dims(1, 10, true, va, 4, 64, st, m1) && st[0] == 0 && m1[0] == 9);
+    assert(av1_tile_dims(1, 6, true, va, 4, 0, st, m1) && m1[0] == 5);
+    /* Uniform wider than MAX_TILE_WIDTH (64 SBs of 64 px) is rejected. */
+    assert(!av1_tile_dims(1, 65, true, va, 4, 64, st, m1));
+    /* Uniform count with no matching layout is rejected. */
+    assert(!av1_tile_dims(3, 4, true, va, 4, 0, st, m1));
+    /* Non-uniform: VA sizes except the last, which is derived. */
+    va[0] = 3; va[1] = 1; va[2] = 50;   /* va[2] (last) must be ignored */
+    assert(av1_tile_dims(3, 10, false, va, 4, 64, st, m1));
+    assert(m1[0] == 3 && m1[1] == 1 && m1[2] == 3 && st[1] == (4u << 4) && st[2] == (6u << 4));
+    /* Non-uniform zero-width last tile, overrun and oversize are rejected. */
+    va[0] = 9;
+    assert(!av1_tile_dims(2, 10, false, va, 4, 0, st, m1));
+    va[0] = 10;
+    assert(!av1_tile_dims(2, 10, false, va, 4, 0, st, m1));
+    va[0] = 2;
+    assert(!av1_tile_dims(2, 10, false, va, 4, 4, st, m1));
+    /* 64 tiles read exactly the 63 VA entries. */
+    for (unsigned int i = 0; i < 63; i++) va[i] = 0;
+    assert(av1_tile_dims(64, 64, false, va, 4, 0, st, m1) && m1[63] == 0 && st[63] == (63u << 4));
+    assert(!av1_tile_dims(65, 65, false, va, 4, 0, st, m1));
+}
+
+static void immediate_case(void)
+{
+    ctx->av1_submit_at_end = true;
+    picture(0, 0, 0);
+    assert(assemble() == VA_STATUS_SUCCESS && requests_queued == 1);
+    assert(!codec.pend_valid);
+    picture(1, 1, 4);
+    pic.ref_frame_map[0] = sid[0];
+    pic.primary_ref_frame = 0;
+    assert(assemble() == VA_STATUS_SUCCESS && requests_queued == 2);
+    assert(!codec.pend_valid);
+    assert(av1_flush(ctx, NULL) == VA_STATUS_SUCCESS && requests_queued == 2);
+    ctx->av1_submit_at_end = false;
+}
+
+static VABufferID input_buffer(VABufferType type, unsigned int size,
+                              unsigned int count, const void *data)
+{
+    VABufferID id;
+    void *mapped;
+    assert(v4l2r_CreateBuffer(&va, cid, type, size, count, NULL, &id) == VA_STATUS_SUCCESS);
+    assert(v4l2r_MapBuffer(&va, id, &mapped) == VA_STATUS_SUCCESS);
+    memcpy(mapped, data, (size_t)size * count);
+    assert(v4l2r_UnmapBuffer(&va, id) == VA_STATUS_SUCCESS);
+    return id;
+}
+
+static VAStatus render_inputs(VABufferID *ids, unsigned int count, bool split)
+{
+    VAStatus status = VA_STATUS_SUCCESS;
+    if (!split)
+        status = v4l2r_RenderPicture(&va, cid, ids, count);
+    else
+        for (unsigned int i = 0; i < count && status == VA_STATUS_SUCCESS; i++)
+            status = v4l2r_RenderPicture(&va, cid, &ids[i], 1);
+    /* Parameters must be copied: clients may destroy them before EndPicture. */
+    for (unsigned int i = 0; i < count; i++)
+        assert(v4l2r_DestroyBuffer(&va, ids[i]) == VA_STATUS_SUCCESS);
+    return status;
+}
+
+/* Chromium 156 FillAV1SliceParameters/SubmitDecode: one whole coded-data
+ * buffer followed by eight separate, one-element parameter buffers, all in
+ * ONE vaRenderPicture. Offsets are relative to that whole data buffer, not
+ * the individual tile, and tg_start/tg_end remain zero after memset.
+ * Synthetic bytes, using yt-399 frame 1's tile sizes/whole-packet offsets. */
+static void multitile_picture(unsigned int target, VASliceParameterBufferAV1 *params)
+{
+    static const unsigned int offsets[8] = {35, 1146, 2230, 3310, 3989, 4883, 5698, 6859};
+    static const unsigned int sizes[8] = {1109, 1082, 1078, 677, 892, 813, 1161, 975};
+    picture(target, 0, 0);
+    pic.frame_width_minus1 = 1919;
+    pic.frame_height_minus1 = 1079;
+    pic.tile_cols = 4;
+    pic.tile_rows = 2;
+    pic.pic_info_fields.bits.uniform_tile_spacing_flag = 1;
+    pic.loop_restoration_fields.bits.yframe_restoration_type = 3;
+    pic.loop_restoration_fields.bits.cbframe_restoration_type = 1;
+    pic.loop_restoration_fields.bits.crframe_restoration_type = 3;
+    pic.loop_restoration_fields.bits.lr_unit_shift = 2;
+    memset(params, 0, 8 * sizeof(*params));
+    for (unsigned int i = 0; i < 8; i++) {
+        params[i].slice_data_offset = offsets[i];
+        params[i].slice_data_size = sizes[i];
+        params[i].slice_data_flag = VA_SLICE_DATA_FLAG_ALL;
+        params[i].tile_row = i / 4;
+        params[i].tile_column = i % 4;
+    }
+}
+
+static void multitile_case(void)
+{
+    unsigned char data[7834];
+    VASliceParameterBufferAV1 params[8];
+    for (unsigned int i = 0; i < sizeof(data); i++) data[i] = (i * 29 + 7) & 255;
+    ctx->av1_submit_at_end = true;
+    for (unsigned int mode = 0; mode < 4; mode++) {
+        VABufferID ids[11];
+        unsigned int n = 0;
+        multitile_picture(mode, params);
+        if (!mode) {
+            /* FFmpeg fills these even with uniform spacing; Chrome doesn't. */
+            for (unsigned int i = 0; i < 3; i++) pic.width_in_sbs_minus_1[i] = 7;
+            pic.height_in_sbs_minus_1[0] = 8;
+        }
+        ids[n++] = input_buffer(VAPictureParameterBufferType, sizeof(pic), 1, &pic);
+        if (!mode) {
+            ids[n++] = input_buffer(VASliceParameterBufferType, sizeof(*params), 8, params);
+            ids[n++] = input_buffer(VASliceDataBufferType, sizeof(data), 1, data);
+        } else {
+            /* Last mode exercises two data-first groups and a nonzero OUTPUT
+             * base. Other modes reproduce Chrome, then split its Render calls. */
+            unsigned int groups = mode == 3 ? 2 : 1;
+            for (unsigned int g = 0; g < groups; g++) {
+                unsigned int base = g ? 3987 : 0;
+                unsigned int bytes = groups == 1 ? sizeof(data) : g ? sizeof(data) - base : 3987;
+                unsigned int first = g ? 4 : 0, end = groups == 1 ? 8 : first + 4;
+                ids[n++] = input_buffer(VASliceDataBufferType, bytes, 1, data + base);
+                for (unsigned int i = first; i < end; i++) {
+                    params[i].slice_data_offset -= base;
+                    ids[n++] = input_buffer(VASliceParameterBufferType, sizeof(*params), 1, &params[i]);
+                    params[i].slice_data_offset += base;
+                }
+            }
+        }
+        assert(v4l2r_BeginPicture(&va, cid, pic.current_frame) == VA_STATUS_SUCCESS);
+        struct v4l2r_output_buffer *out = ctx->pic.output;
+        assert(render_inputs(ids, n, mode == 2) == VA_STATUS_SUCCESS);
+        assert(v4l2r_EndPicture(&va, cid) == VA_STATUS_SUCCESS);
+        assert(requests_queued == mode + 1 && log_count == mode + 1 && !codec.pend_valid);
+        assert(out->bytesused == sizeof(data) && !memcmp(out->addr, data, sizeof(data)));
+        assert(codec.num_tiles == 8 && codec.slices_consumed == 8);
+        for (unsigned int i = 0; i < 8; i++) {
+            assert(codec.tiles[i].tile_offset == params[i].slice_data_offset);
+            assert(codec.tiles[i].tile_size == params[i].slice_data_size);
+            assert(codec.tiles[i].tile_row == i / 4 && codec.tiles[i].tile_col == i % 4);
+        }
+        /* Every V4L2 control, including geometry and tile entries, must match
+         * the FFmpeg-style aggregate parameter buffer byte-for-byte. */
+        assert(log_[mode].count == log_[0].count);
+        for (unsigned int i = 0; i < log_[0].count; i++) {
+            assert(log_[mode].ctrl[i].id == log_[0].ctrl[i].id);
+            assert(log_[mode].ctrl[i].size == log_[0].ctrl[i].size);
+            assert(!memcmp(log_[mode].ctrl[i].data, log_[0].ctrl[i].data, log_[0].ctrl[i].size));
+        }
+    }
+}
+
+static void multitile_invalid_case(void)
+{
+    unsigned char data[7834] = {0};
+    VASliceParameterBufferAV1 params[8];
+    ctx->av1_submit_at_end = true;
+    for (unsigned int mode = 0; mode < 4; mode++) {
+        VABufferID ids[10];
+        unsigned int n = 0;
+        multitile_picture(0, params);
+        if (!mode) params[7].slice_data_offset = sizeof(data) + 1;
+        if (mode == 1) params[7].slice_data_size++;
+        ids[n++] = input_buffer(VAPictureParameterBufferType, sizeof(pic), 1, &pic);
+        ids[n++] = input_buffer(VASliceDataBufferType, sizeof(data), 1, data);
+        if (mode < 2)
+            for (unsigned int i = 0; i < 8; i++)
+                ids[n++] = input_buffer(VASliceParameterBufferType, sizeof(*params), 1, &params[i]);
+        else if (mode == 3)
+            ids[n++] = input_buffer(VASliceDataBufferType, sizeof(data), 1, data);
+        assert(v4l2r_BeginPicture(&va, cid, pic.current_frame) == VA_STATUS_SUCCESS);
+        VAStatus status = render_inputs(ids, n, false);
+        if (mode == 3) assert(status == VA_STATUS_ERROR_INVALID_BUFFER);
+        else assert(status == VA_STATUS_SUCCESS);
+        status = v4l2r_EndPicture(&va, cid);
+        assert(status == (mode == 2 ? VA_STATUS_ERROR_OPERATION_FAILED : VA_STATUS_ERROR_INVALID_BUFFER));
+        assert(!requests_queued && !log_count && !codec.pend_valid);
+    }
+    /* BeginPicture must discard the failed frame's deferred association. */
+    picture(0, 0, 0);
+    assert(assemble() == VA_STATUS_SUCCESS && requests_queued == 1);
+    assert(codec.num_tiles == 1 && codec.slices_consumed == 1);
+}
+
 int main(int argc, char **argv)
 {
     char text[32768], match[256], log_path[4096];
@@ -398,6 +615,32 @@ int main(int argc, char **argv)
         assert(!unsetenv("LIBVA_V4L2_TRACE"));
     assert(dup2(fileno(sink), STDERR_FILENO) == STDERR_FILENO);
     setup();
+    if (!strncmp(argv[1], "data-first-", 11)) { data_first = true; argv[1] += 11; }
+    if (!strcmp(argv[1], "tile-dims")) {
+        tile_dims_case();
+        teardown();
+        log_reset();
+        fclose(sink);
+        printf("PASS tile-dims trace=%s uniform/non-uniform AV1 tile geometry\n", argv[2]);
+        return 0;
+    }
+    if (!strncmp(argv[1], "multitile", 9)) {
+        if (!strcmp(argv[1], "multitile")) multitile_case();
+        else { assert(!strcmp(argv[1], "multitile-invalid")); multitile_invalid_case(); }
+        teardown();
+        log_reset();
+        fclose(sink);
+        printf("PASS %s trace=%s AV1 multi-buffer tile association\n", argv[1], argv[2]);
+        return 0;
+    }
+    if (!strcmp(argv[1], "immediate")) {
+        immediate_case();
+        teardown();
+        log_reset();
+        fclose(sink);
+        printf("PASS immediate trace=%s AV1 frames queued at EndPicture\n", argv[2]);
+        return 0;
+    }
     if (!strncmp(argv[1], "required-", 9) || !strcmp(argv[1], "primary-bounds") ||
         !strcmp(argv[1], "slot-bounds") || !strcmp(argv[1], "valid-primary") ||
         !strcmp(argv[1], "key-default") || !strcmp(argv[1], "intra-default") ||

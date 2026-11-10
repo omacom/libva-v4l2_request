@@ -401,6 +401,8 @@ struct v4l2r_context {
 	int video_fd;
 	int media_fd;
 	bool is_avd;
+	/* AV1: queue each frame at EndPicture (decoder ignores refresh_frame_flags). */
+	bool av1_submit_at_end;
 
 	unsigned int picture_width;
 	unsigned int picture_height;
