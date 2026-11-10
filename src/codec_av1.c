@@ -753,9 +753,16 @@ static VAStatus av1_process_tiles(struct v4l2r_context *ctx, struct v4l2r_buffer
  uint32_t base = ctx->pic.output ? ctx->pic.output->bytesused : 0;
  size_t bytes = v4l2r_buffer_bytes(buf);
  VAStatus status;
- /* Two unmatched byte buffers have ambiguous parameter-relative offsets. */
- if (codec->data_before_params)
-  return VA_STATUS_ERROR_INVALID_BUFFER;
+ /* Finish the preceding data-first group only at a data boundary: Chrome
+  * sends a separate parameter buffer for every tile in the same data buffer. */
+ if (codec->data_before_params) {
+  /* Two unmatched byte buffers have ambiguous parameter-relative offsets. */
+  if (codec->slices_consumed == codec->nb_va_slices)
+   return VA_STATUS_ERROR_INVALID_BUFFER;
+  status = av1_add_tiles(ctx, codec->deferred_base, codec->deferred_bytes);
+  if (status != VA_STATUS_SUCCESS) return status;
+  codec->data_before_params = false;
+ }
  if (codec->slices_consumed < codec->nb_va_slices) {
   status = av1_add_tiles(ctx, base, bytes);
   if (status != VA_STATUS_SUCCESS) return status;
@@ -971,13 +978,8 @@ static VAStatus av1_render_buffer(struct v4l2r_context *ctx,
 		if (codec->has_film_grain)
 			av1_fill_film_grain(codec);
 		return VA_STATUS_SUCCESS;
-	case VASliceParameterBufferType: {
-  VAStatus status = av1_store_slice_params(codec, buf);
-  if (status != VA_STATUS_SUCCESS || !codec->data_before_params) return status;
-  status = av1_add_tiles(ctx, codec->deferred_base, codec->deferred_bytes);
-  if (status == VA_STATUS_SUCCESS) codec->data_before_params = false;
-  return status;
- }
+	case VASliceParameterBufferType:
+		return av1_store_slice_params(codec, buf);
 	case VASliceDataBufferType:
 		if (!codec->have_pic)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
@@ -990,6 +992,16 @@ static VAStatus av1_render_buffer(struct v4l2r_context *ctx,
 static VAStatus av1_end_picture(struct v4l2r_context *ctx)
 {
 	struct av1_context *codec = ctx->codec_priv;
+
+	/* EndPicture also terminates a data-first group. All of its parameter
+	 * buffers have now arrived, even if spread over several Render calls. */
+	if (codec->data_before_params && codec->slices_consumed < codec->nb_va_slices) {
+		VAStatus status = av1_add_tiles(ctx, codec->deferred_base,
+					       codec->deferred_bytes);
+		if (status != VA_STATUS_SUCCESS)
+			return status;
+		codec->data_before_params = false;
+	}
 
 	v4l2r_trace("AV1 end have_pic=%d tiles=%u slices=%u consumed=%u\n", codec->have_pic, codec->num_tiles, codec->nb_va_slices, codec->slices_consumed);
 	if (!codec->have_pic || !codec->num_tiles || codec->data_before_params ||
