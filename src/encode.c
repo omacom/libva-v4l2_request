@@ -159,8 +159,15 @@ uint32_t v4l2r_encoder_attribute(VAProfile profile, VAConfigAttribType type)
 	case VAConfigAttribRateControl:
 		return VA_RC_CQP | VA_RC_CBR | VA_RC_VBR;
 	case VAConfigAttribEncPackedHeaders:
-		/* The encoder writes its own parameter sets in band. */
-		return VA_ENC_PACKED_HEADER_NONE;
+		/*
+		 * The encoder writes its own parameter sets in band, in front of
+		 * every IDR. Offering packed sequence headers anyway lets a client
+		 * build them for its container (FFmpeg writes extradata, i.e. avcC /
+		 * hvcC, only with this bit); the packed buffers it then sends are
+		 * accepted and dropped in v4l2r_enc_render. Without it, Matroska
+		 * refuses the stream before the first frame (empty CodecPrivate).
+		 */
+		return VA_ENC_PACKED_HEADER_SEQUENCE;
 	case VAConfigAttribEncMaxRefFrames:
 		/* One forward reference, no backward: no B-frames. */
 		return 1;
