@@ -122,6 +122,11 @@ VAStatus v4l2r_DestroySurfaces(VADriverContextP va_ctx, VASurfaceID *surface_lis
 				vpp_busy = true;
 				break;
 			}
+			/* An encoder reads its input at EndPicture. */
+			if (ctx->in_picture && v4l2r_enc_holds(ctx, surface)) {
+				vpp_busy = true;
+				break;
+			}
 		}
 		pthread_mutex_unlock(&drv->mutex);
 		if (!surface)

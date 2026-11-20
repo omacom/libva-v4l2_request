@@ -231,6 +231,12 @@ void v4l2r_enc_destroy(struct v4l2r_context *ctx)
 	ctx->enc = NULL;
 }
 
+bool v4l2r_enc_holds(const struct v4l2r_context *ctx,
+		     const struct v4l2r_surface *surface)
+{
+	return ctx->enc && ctx->enc->input == surface;
+}
+
 VAStatus v4l2r_enc_begin_picture(struct v4l2r_context *ctx,
 				 struct v4l2r_surface *input)
 {
@@ -612,7 +618,8 @@ VAStatus v4l2r_enc_end_picture(struct v4l2r_context *ctx)
 		return VA_STATUS_ERROR_INVALID_PARAMETER;
 
 	coded = V4L2R_BUFFER_GET(drv, enc->coded_buf);
-	if (!coded || coded->type != VAEncCodedBufferType)
+	if (!coded || coded->type != VAEncCodedBufferType ||
+	    coded->context_id != ctx->id)
 		return VA_STATUS_ERROR_INVALID_BUFFER;
 
 	status = v4l2r_surface_ready(enc->input);

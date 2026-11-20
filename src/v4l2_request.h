@@ -857,6 +857,8 @@ uint32_t v4l2r_encoder_attribute(VAProfile profile, VAConfigAttribType type);
 VAStatus v4l2r_enc_create(struct v4l2r_context *ctx,
 			  const struct v4l2r_config *config);
 void v4l2r_enc_destroy(struct v4l2r_context *ctx);
+bool v4l2r_enc_holds(const struct v4l2r_context *ctx,
+		     const struct v4l2r_surface *surface);
 VAStatus v4l2r_enc_begin_picture(struct v4l2r_context *ctx,
 				 struct v4l2r_surface *input);
 VAStatus v4l2r_enc_render_buffer(struct v4l2r_context *ctx,
