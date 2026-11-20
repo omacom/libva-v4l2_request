@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -70,13 +71,18 @@ VAStatus v4l2r_CreateBuffer(VADriverContextP va_ctx, VAContextID context_id,
 	/* A coded buffer maps to a VACodedBufferSegment list: keep the one
 	 * segment in front of the data the encoder writes (encode.c). */
 	if (type == VAEncCodedBufferType) {
-		if ((size_t)size * num_elements > SIZE_MAX - sizeof(VACodedBufferSegment)) {
+		/* element_size is an unsigned int: compute in size_t and
+		 * refuse a total the field cannot hold. */
+		size_t total = (size_t)size * num_elements;
+		if (num_elements && total / num_elements != size)
+			total = SIZE_MAX;
+		if (total > UINT_MAX - sizeof(VACodedBufferSegment)) {
 			pthread_mutex_lock(&drv->mutex);
 			v4l2r_handles_free(&drv->buffers, id);
 			pthread_mutex_unlock(&drv->mutex);
 			return VA_STATUS_ERROR_ALLOCATION_FAILED;
 		}
-		buffer->element_size = size * num_elements + sizeof(VACodedBufferSegment);
+		buffer->element_size = (unsigned int)(total + sizeof(VACodedBufferSegment));
 		buffer->nb_elements = 1;
 		buffer->data = calloc(1, buffer->element_size);
 		if (!buffer->data) {
