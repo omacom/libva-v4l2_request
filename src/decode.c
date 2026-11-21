@@ -662,6 +662,7 @@ static VAStatus queue_decode(struct v4l2r_context *ctx,
 			goto fail;
 		}
 		target->decode_status = VA_STATUS_SUCCESS;
+		ctx->captures[target->capture_index].decode_seq = ctx->submitted;
 
 		/* ctx->submitted is now this frame's sequence number. Mark every
 		 * buffer it references as needed until this frame completes, so a

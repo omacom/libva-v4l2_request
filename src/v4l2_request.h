@@ -69,6 +69,7 @@ static inline uint64_t v4l2r_now_ns(void)
 /* Spare CAPTURE buffers a busy surface may be rebound to (V4L2R_REBIND). */
 #define V4L2R_REBIND_DEFAULT 4
 #define V4L2R_REBIND_MAX 8
+#define V4L2R_REBIND_FIRST_DEFAULT 1
 
 /* Upper bound on any single wait for the hardware (buffer/request/fence). */
 #define V4L2R_POLL_TIMEOUT_MS		2000
@@ -347,6 +348,8 @@ struct v4l2r_capture_buffer {
 	 * ctx->completed reaches this value, i.e. until every frame that
 	 * references its current contents has finished decoding. */
 	uint64_t last_ref_seq;
+	/* Submission count of the most recent decode into this buffer. */
+	uint64_t decode_seq;
 };
 
 struct v4l2r_output_buffer {
@@ -410,6 +413,7 @@ struct v4l2r_context {
 	int media_fd;
 	bool is_avd;
 	unsigned int rebind_spare;	/* V4L2R_REBIND: 0 = wait for busy buffers */
+	bool rebind_first;	/* V4L2R_REBIND_FIRST: spares busy = wait for the first */
 
 	unsigned int picture_width;
 	unsigned int picture_height;

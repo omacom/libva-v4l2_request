@@ -463,6 +463,7 @@ static void capture_buffer_cleanup(struct v4l2r_context *ctx,
 		}
 	}
 	capture->client_exported = false;
+	capture->decode_seq = 0;
 
 	if (capture->surface) {
 		capture->surface->ctx = NULL;
@@ -536,6 +537,55 @@ static int free_list_take_idle(struct v4l2r_context *ctx)
 			free_list_push(ctx, index);
 	}
 	return found;
+}
+
+/* The submission count after which nothing still reads or writes the buffer. */
+static uint64_t capture_free_seq(const struct v4l2r_capture_buffer *capture)
+{
+	return capture->decode_seq > capture->last_ref_seq ?
+	       capture->decode_seq : capture->last_ref_seq;
+}
+
+/*
+ * Every rebind spare is busy. Waiting for the bound buffer can drain the
+ * whole queue when its last reader is the newest frame in flight, and the
+ * decoder then starts the next frame from idle. Frames complete in
+ * submission order, so wait instead for the spare that frees first and
+ * leave the frames after it queued. Returns that spare, off the free list,
+ * or -1 when no spare frees before the bound buffer does.
+ */
+static int free_list_take_first(struct v4l2r_context *ctx, int bound)
+{
+	unsigned int count = ctx->free_count;
+	uint64_t best_seq;
+	int best = -1;
+
+	pthread_mutex_lock(&ctx->mutex);
+	best_seq = capture_free_seq(&ctx->captures[bound]);
+	for (unsigned int i = 0; i < count; i++) {
+		int index = free_list_pop(ctx);
+		uint64_t seq = capture_free_seq(&ctx->captures[index]);
+
+		if (seq < best_seq) {
+			best_seq = seq;
+			best = index;
+		}
+		free_list_push(ctx, index);
+	}
+	pthread_mutex_unlock(&ctx->mutex);
+
+	if (best < 0 || v4l2r_wait_completed(ctx, best_seq) != VA_STATUS_SUCCESS)
+		return -1;
+
+	for (unsigned int i = 0; i < count; i++) {
+		int index = free_list_pop(ctx);
+
+		if (index != best)
+			free_list_push(ctx, index);
+	}
+	v4l2r_trace("rebind: all spares busy, waited for CAPTURE buffer #%d "
+		    "(seq %llu)\n", best, (unsigned long long)best_seq);
+	return best;
 }
 
 /* Per-CAPTURE-buffer size implied by the negotiated format, in bytes. */
@@ -925,6 +975,8 @@ static int capture_buffer_bind(struct v4l2r_context *ctx,
 
 		if (idle < 0 && ctx->free_count < ctx->rebind_spare)
 			idle = capture_buffer_new(ctx);
+		if (idle < 0 && ctx->rebind_first)
+			idle = free_list_take_first(ctx, index);
 		if (idle >= 0) {
 			int old = index;
 
@@ -1261,6 +1313,10 @@ VAStatus v4l2r_CreateContext(VADriverContextP va_ctx, VAConfigID config_id,
 
 			ctx->rebind_spare = spare < 0 ? 0 :
 				spare > V4L2R_REBIND_MAX ? V4L2R_REBIND_MAX : spare;
+			const char *first = getenv("V4L2R_REBIND_FIRST");
+
+			ctx->rebind_first = first ? atoi(first) != 0 :
+					    V4L2R_REBIND_FIRST_DEFAULT;
 		}
 
 		capabilities = (capability.capabilities & V4L2_CAP_DEVICE_CAPS) ?
