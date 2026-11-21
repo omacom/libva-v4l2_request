@@ -215,6 +215,13 @@ struct v4l2r_decoder {
  * into NV12 that displays and clients can consume. pixelformats lists the
  * source (OUTPUT queue) formats the device can read.
  */
+struct v4l2r_encoder {
+	char video_path[256];
+	char card[32];
+	bool h264;
+	bool hevc;
+};
+
 struct v4l2r_converter {
 	char video_path[256];
 	char card[32];
@@ -456,6 +463,10 @@ struct v4l2r_context {
 	/* Video processing state for VAEntrypointVideoProc contexts; such
 	 * contexts have no codec, decoder device or queues. See convert.c. */
 	struct v4l2r_vpp *vpp;
+
+	/* Encode state for VAEntrypointEncSlice contexts; such contexts have
+	 * no codec or decoder device. See encode.c. */
+	struct v4l2r_enc *enc;
 };
 
 /*
@@ -616,6 +627,11 @@ struct v4l2r_driver {
 	struct v4l2r_converter converter;
 	bool converter_probed;
 	bool has_converter;
+
+	/* Stateful encoder, probed on first use (see encode.c). */
+	struct v4l2r_encoder encoder;
+	bool encoder_probed;
+	bool has_encoder;
 };
 
 void v4l2r_lock_surface_api(struct VADriverVTable *vtable);
@@ -834,6 +850,20 @@ struct v4l2r_vpp {
 	uint32_t mirror;		/* VA_MIRROR_* mask */
 	bool have_params;
 };
+
+struct v4l2r_enc;
+bool v4l2r_encoder_supports(struct v4l2r_driver *drv, VAProfile profile);
+uint32_t v4l2r_encoder_attribute(VAProfile profile, VAConfigAttribType type);
+VAStatus v4l2r_enc_create(struct v4l2r_context *ctx,
+			  const struct v4l2r_config *config);
+void v4l2r_enc_destroy(struct v4l2r_context *ctx);
+bool v4l2r_enc_holds(const struct v4l2r_context *ctx,
+		     const struct v4l2r_surface *surface);
+VAStatus v4l2r_enc_begin_picture(struct v4l2r_context *ctx,
+				 struct v4l2r_surface *input);
+VAStatus v4l2r_enc_render_buffer(struct v4l2r_context *ctx,
+				 struct v4l2r_buffer *buf);
+VAStatus v4l2r_enc_end_picture(struct v4l2r_context *ctx);
 
 VAStatus v4l2r_vpp_create(struct v4l2r_context *ctx);
 void v4l2r_vpp_destroy(struct v4l2r_context *ctx);

@@ -5,6 +5,7 @@ driver_sources = files(
   'handles.c',
   'context.c',
   'convert.c',
+  'encode.c',
   'decode.c',
   'surface.c',
   'buffer.c',
