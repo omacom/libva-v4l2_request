@@ -292,6 +292,8 @@ struct v4l2r_surface {
 	VAStatus decode_status;
 	/* Derived images pin their source surface; protected by drv->mutex. */
 	unsigned int image_refs;
+	/* Handed to a client by vaExportSurfaceHandle(). */
+	bool client_exported;
 	struct v4l2r_surface_backing *backing;
 	/* A finished decode still needs (or is undergoing) format conversion
 	 * into the backing. Protected by ctx->mutex. */

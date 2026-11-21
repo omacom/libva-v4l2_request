@@ -1028,6 +1028,8 @@ VAStatus v4l2r_ExportSurfaceHandle(VADriverContextP va_ctx, VASurfaceID surface_
 	if (status != VA_STATUS_SUCCESS)
 		return status;
 
+	surface->client_exported = true;
+
 	return fill_prime_descriptor(&view, flags, descriptor);
 }
 

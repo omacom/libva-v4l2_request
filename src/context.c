@@ -827,6 +827,23 @@ static int capture_buffer_bind(struct v4l2r_context *ctx,
 	 * The format converter chain has its own backing rules, keep MMAP
 	 * there.
 	 */
+	/*
+	 * Standalone backing that no client holds is not an export.
+	 * FFmpeg derives an image of one pool surface to probe whether
+	 * vaDeriveImage() works and destroys it at once; that surface is
+	 * then the first one decoded into, and its leftover backing would
+	 * put the whole queue in DMABUF mode, where busy surfaces cannot
+	 * be rebound. With V4L2R_REBIND set, drop such backing before the
+	 * first decode: the decoder output replaces its contents anyway.
+	 */
+	if (ctx->rebind_spare && !ctx->conv && index < 0 &&
+	    surface->backing && !surface->client_exported &&
+	    !surface->image_refs) {
+		v4l2r_trace("drop unexported backing of surface 0x%08x\n",
+			    surface->id);
+		v4l2r_surface_free_backing(surface);
+	}
+
 	if (!ctx->capture_memory) {
 		if (!ctx->conv && surface->backing) {
 			ctx->capture_memory = V4L2_MEMORY_DMABUF;
