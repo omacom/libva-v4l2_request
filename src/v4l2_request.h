@@ -67,7 +67,7 @@ static inline uint64_t v4l2r_now_ns(void)
  * count plus the pipeline depth, so keep headroom up to the 64-bit bitmask. */
 #define V4L2R_MAX_CAPTURE_BUFFERS	64
 /* Spare CAPTURE buffers a busy surface may be rebound to (V4L2R_REBIND). */
-#define V4L2R_REBIND_DEFAULT 0
+#define V4L2R_REBIND_DEFAULT 4
 #define V4L2R_REBIND_MAX 8
 
 /* Upper bound on any single wait for the hardware (buffer/request/fence). */
