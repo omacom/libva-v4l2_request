@@ -281,7 +281,7 @@ check; historical counts predate several additions:
 
 | Configuration | Codecs | Expected tests |
 | --- | --- | --- |
-| ubuntu-latest and ubuntu-24.04-arm, GCC/Clang, 6.8 UAPI (`build-test`, `codec-options`, `static-analysis`) | all six | full registered suite; enumerate with `meson test -C build --list` |
+| ubuntu-24.04 and ubuntu-24.04-arm, GCC/Clang, 6.8 UAPI (`build-test`, `codec-options`, `static-analysis`) | all six | full registered suite; enumerate with `meson test -C build --list` |
 | ubuntu:22.04 container, 5.15 UAPI (`deps-oldest`, `configure-reject`) | h264, mpeg2, vp8 | HEVC/VP9/AV1-specific cases absent |
 | ubuntu:20.04 container, 5.4 UAPI (`uapi-minimal`) | none | codec-gated cases absent; core and Python checks remain |
 | all codecs disabled (any headers) | none | core cases, available image cases, and no-device VA fuzz replay |

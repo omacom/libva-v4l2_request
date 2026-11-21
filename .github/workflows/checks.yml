@@ -19,10 +19,10 @@ jobs:
         include:
           - cc: gcc
             arch: x86_64
-            os: ubuntu-latest
+            os: ubuntu-24.04
           - cc: clang
             arch: x86_64
-            os: ubuntu-latest
+            os: ubuntu-24.04
           - cc: gcc
             arch: aarch64
             os: ubuntu-24.04-arm
@@ -68,7 +68,7 @@ jobs:
 
   deps-oldest:
     name: oldest verified dependencies (libva 2.14, kernel UAPI 5.15)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
     steps:
       - name: Install git and build dependencies
@@ -128,7 +128,7 @@ jobs:
 
   uapi-minimal:
     name: oldest kernel UAPI (5.4 headers, all stateless codecs compiled out)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
     steps:
       - name: Install git and build dependencies
@@ -182,7 +182,7 @@ jobs:
 
   configure-reject:
     name: configure-time codec option diagnostics (kernel UAPI 5.15)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
     steps:
       - name: Install git and build dependencies
@@ -210,7 +210,7 @@ jobs:
 
   codec-options:
     name: codec feature options (all disabled and mixed)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Install build dependencies
@@ -224,7 +224,10 @@ jobs:
             -Dcodec_vp8=disabled -Dcodec_vp9=disabled -Dcodec_av1=disabled
           meson compile -C build-off
           meson test -C build-off --print-errorlogs
+          # Newer meson (1.10 on the ubuntu-26.04 image) lists each test as
+          # "project:name"; drop the project so the names below match either form.
           tests="$(meson test -C build-off --list)"
+          tests="$(printf '%s\n' "$tests" | sed 's/^libva-v4l2_request://')"
           echo "$tests"
           for absent in hevc-parser vp9-malformed vp9-state vp9-parser vp9-references \
                         h264-incomplete h264-slice-count h264-references h264-parser h264-profile \
@@ -248,6 +251,7 @@ jobs:
           meson compile -C build-mixed
           meson test -C build-mixed --print-errorlogs
           tests="$(meson test -C build-mixed --list)"
+          tests="$(printf '%s\n' "$tests" | sed 's/^libva-v4l2_request://')"
           echo "$tests"
           printf '%s\n' "$tests" | grep -q '^hevc-parser$' || {
             echo 'ERROR: hevc-parser missing with -Dcodec_hevc=enabled' >&2
@@ -268,7 +272,7 @@ jobs:
 
   static-analysis:
     name: bounded static analysis and warning-free builds
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Install build and analysis dependencies
@@ -290,6 +294,9 @@ jobs:
         # need a dedicated cleanup rather than a blanket disable here.  The
         # database is filtered because cppcheck's -i does not reliably
         # exclude the test entries of a meson compile db.
+        # System headers are not parsed, so libva's version header is passed in
+        # by name: cppcheck 2.19 reports an #if on an unknown function-like
+        # macro (VA_CHECK_VERSION) as an error instead of skipping the branch.
         run: |
           meson setup build-sa
           meson compile -C build-sa
@@ -314,11 +321,12 @@ jobs:
           print('cppcheck scope: %d driver translation units' % len(keep))
           PY
           cppcheck --project=build-sa/compile_commands_src.json \
+            --include="$(pkg-config --variable=includedir libva)/va/va_version.h" \
             --enable=warning --inline-suppr --suppress=missingIncludeSystem \
             --error-exitcode=1 -j 2
 
   corpus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       FLUSTER_COMMIT: f3ad284a9e6cac70dc01b02e0de71c2994181d34
     steps:
@@ -346,7 +354,7 @@ jobs:
   userspace:
     needs: [build-test, deps-oldest, uapi-minimal, configure-reject, codec-options, static-analysis, corpus]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Evaluate the required offline checks
