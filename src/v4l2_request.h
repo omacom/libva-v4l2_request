@@ -66,6 +66,9 @@ static inline uint64_t v4l2r_now_ns(void)
  * per-frame buffer pool the count reaches roughly the client's live surface
  * count plus the pipeline depth, so keep headroom up to the 64-bit bitmask. */
 #define V4L2R_MAX_CAPTURE_BUFFERS	64
+/* Spare CAPTURE buffers a busy surface may be rebound to (V4L2R_REBIND). */
+#define V4L2R_REBIND_DEFAULT 0
+#define V4L2R_REBIND_MAX 8
 
 /* Upper bound on any single wait for the hardware (buffer/request/fence). */
 #define V4L2R_POLL_TIMEOUT_MS		2000
@@ -401,6 +404,7 @@ struct v4l2r_context {
 	int video_fd;
 	int media_fd;
 	bool is_avd;
+	unsigned int rebind_spare;	/* V4L2R_REBIND: 0 = wait for busy buffers */
 
 	unsigned int picture_width;
 	unsigned int picture_height;

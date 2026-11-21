@@ -495,6 +495,46 @@ static int free_list_pop(struct v4l2r_context *ctx)
 	return index;
 }
 
+/*
+ * A buffer can be decoded into without waiting: its own last decode has
+ * completed and no submitted frame still references its contents.
+ */
+static bool capture_idle(struct v4l2r_context *ctx, int index)
+{
+	bool idle;
+
+	pthread_mutex_lock(&ctx->mutex);
+	idle = !(ctx->queued_capture & (UINT64_C(1) << index)) &&
+	       ctx->captures[index].last_ref_seq <= ctx->completed;
+	pthread_mutex_unlock(&ctx->mutex);
+	return idle;
+}
+
+static bool capture_exported(const struct v4l2r_capture_buffer *capture)
+{
+	for (unsigned int i = 0; i < capture->nb_planes; i++)
+		if (capture->dmabuf_fd[i] >= 0)
+			return true;
+	return false;
+}
+
+/* Take the oldest idle buffer off the free list, keeping the others' order. */
+static int free_list_take_idle(struct v4l2r_context *ctx)
+{
+	unsigned int count = ctx->free_count;
+	int found = -1;
+
+	for (unsigned int i = 0; i < count; i++) {
+		int index = free_list_pop(ctx);
+
+		if (found < 0 && capture_idle(ctx, index))
+			found = index;
+		else
+			free_list_push(ctx, index);
+	}
+	return found;
+}
+
 /* Per-CAPTURE-buffer size implied by the negotiated format, in bytes. */
 static size_t capture_format_bytes(const struct v4l2_format *fmt)
 {
@@ -845,6 +885,38 @@ static int capture_buffer_bind(struct v4l2r_context *ctx,
 			  surface->id, index, recycled ? "recycled" : "new");
 	}
 
+	/*
+	 * The client handed back a surface whose buffer is still busy: its
+	 * last decode is in flight, or a submitted frame still references
+	 * its contents. With V4L2R_REBIND set, decode into an idle buffer
+	 * instead of waiting. The old buffer is orphaned with its contents
+	 * and last_ref_seq intact, so frames already submitted still find it
+	 * by its timestamp, and it is only recycled once they are done. Only
+	 * for decoder-allocated buffers nobody has exported: an exported
+	 * buffer's memory is what the client sees for this surface. At most
+	 * rebind_spare buffers are added beyond the bound ones.
+	 */
+	if (ctx->rebind_spare && ctx->capture_memory == V4L2_MEMORY_MMAP &&
+	    !ctx->conv && !capture_exported(&ctx->captures[index]) &&
+	    !capture_idle(ctx, index)) {
+		int idle = free_list_take_idle(ctx);
+
+		if (idle < 0 && ctx->free_count < ctx->rebind_spare)
+			idle = capture_buffer_new(ctx);
+		if (idle >= 0) {
+			int old = index;
+
+			v4l2r_context_release_capture(ctx, old);
+			ctx->captures[idle].surface = surface;
+			surface->capture_index = idle;
+			index = idle;
+			v4l2r_trace("rebind surface 0x%08x: CAPTURE buffer #%d "
+				    "busy, now #%d (pool %u, free %u)\n",
+				    surface->id, old, idle, ctx->nb_captures,
+				    ctx->free_count);
+		}
+	}
+
 	/* Do not overwrite the buffer while its own last decode is in flight,
 	 * while any frame still references its current contents, or while
 	 * the format converter is still reading it. */
@@ -1161,6 +1233,13 @@ VAStatus v4l2r_CreateContext(VADriverContextP va_ctx, VAConfigID config_id,
 		if (ioctl(ctx->video_fd, VIDIOC_QUERYCAP, &capability) < 0)
 			goto next;
 		ctx->is_avd = !strcmp((const char *)capability.driver, "avd");
+		{
+			const char *rebind = getenv("V4L2R_REBIND");
+			int spare = rebind ? atoi(rebind) : V4L2R_REBIND_DEFAULT;
+
+			ctx->rebind_spare = spare < 0 ? 0 :
+				spare > V4L2R_REBIND_MAX ? V4L2R_REBIND_MAX : spare;
+		}
 
 		capabilities = (capability.capabilities & V4L2_CAP_DEVICE_CAPS) ?
 			       capability.device_caps : capability.capabilities;
