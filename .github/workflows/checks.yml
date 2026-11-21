@@ -19,10 +19,10 @@ jobs:
         include:
           - cc: gcc
             arch: x86_64
-            os: ubuntu-latest
+            os: ubuntu-24.04
           - cc: clang
             arch: x86_64
-            os: ubuntu-latest
+            os: ubuntu-24.04
           - cc: gcc
             arch: aarch64
             os: ubuntu-24.04-arm
@@ -68,7 +68,7 @@ jobs:
 
   deps-oldest:
     name: oldest verified dependencies (libva 2.14, kernel UAPI 5.15)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
     steps:
       - name: Install git and build dependencies
@@ -128,7 +128,7 @@ jobs:
 
   uapi-minimal:
     name: oldest kernel UAPI (5.4 headers, all stateless codecs compiled out)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
     steps:
       - name: Install git and build dependencies
@@ -182,7 +182,7 @@ jobs:
 
   configure-reject:
     name: configure-time codec option diagnostics (kernel UAPI 5.15)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: ubuntu:22.04@sha256:829f6df217bcbae2b371026e81711d1a787c61b2967ad09d015063663ebafbf7
     steps:
       - name: Install git and build dependencies
@@ -210,7 +210,7 @@ jobs:
 
   codec-options:
     name: codec feature options (all disabled and mixed)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Install build dependencies
@@ -268,7 +268,7 @@ jobs:
 
   static-analysis:
     name: bounded static analysis and warning-free builds
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Install build and analysis dependencies
@@ -318,7 +318,7 @@ jobs:
             --error-exitcode=1 -j 2
 
   corpus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       FLUSTER_COMMIT: f3ad284a9e6cac70dc01b02e0de71c2994181d34
     steps:
@@ -346,7 +346,7 @@ jobs:
   userspace:
     needs: [build-test, deps-oldest, uapi-minimal, configure-reject, codec-options, static-analysis, corpus]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Evaluate the required offline checks
