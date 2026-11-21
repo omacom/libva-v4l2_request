@@ -34,6 +34,17 @@
 #include <va/va_enc_h264.h>
 #include <va/va_enc_hevc.h>
 
+/*
+ * Constant quality is newer than the oldest kernel headers this driver
+ * builds against (5.4). The control ID and the menu value are fixed UAPI,
+ * and the encoder still decides at run time: VIDIOC_S_CTRL fails on a
+ * kernel without the control and the rate control request is refused.
+ */
+#ifndef V4L2_CID_MPEG_VIDEO_CONSTANT_QUALITY
+#define V4L2_CID_MPEG_VIDEO_CONSTANT_QUALITY	(V4L2_CID_MPEG_BASE + 645)
+#define V4L2_MPEG_VIDEO_BITRATE_MODE_CQ		2
+#endif
+
 #define V4L2R_ENC_CAPTURE_BUFFERS	2
 #define V4L2R_ENC_TIMEOUT_MS		2000
 
