@@ -339,6 +339,9 @@ struct v4l2r_capture_buffer {
 	uint32_t plane_size[VIDEO_MAX_PLANES];
 	int dmabuf_fd[VIDEO_MAX_PLANES];	/* exported lazily, -1 if not */
 	void *map[VIDEO_MAX_PLANES];		/* mmap()ed lazily, NULL if not */
+	/* Handed to a client by vaExportSurfaceHandle(); the driver's own
+	 * exports for image access do not count. */
+	bool client_exported;
 	/* Submission count of the most recent frame that used this buffer as a
 	 * reference. A new decode may not overwrite the buffer until
 	 * ctx->completed reaches this value, i.e. until every frame that

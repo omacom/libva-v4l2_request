@@ -462,6 +462,7 @@ static void capture_buffer_cleanup(struct v4l2r_context *ctx,
 			capture->dmabuf_fd[i] = -1;
 		}
 	}
+	capture->client_exported = false;
 
 	if (capture->surface) {
 		capture->surface->ctx = NULL;
@@ -510,12 +511,14 @@ static bool capture_idle(struct v4l2r_context *ctx, int index)
 	return idle;
 }
 
+/*
+ * Whether a client holds this buffer's memory as the surface's dma-buf.
+ * Image access (vaDeriveImage, vaGetImage) exports the buffer for the
+ * driver's own mapping too, but no client keeps that as the surface.
+ */
 static bool capture_exported(const struct v4l2r_capture_buffer *capture)
 {
-	for (unsigned int i = 0; i < capture->nb_planes; i++)
-		if (capture->dmabuf_fd[i] >= 0)
-			return true;
-	return false;
+	return capture->client_exported;
 }
 
 /* Take the oldest idle buffer off the free list, keeping the others' order. */
@@ -909,7 +912,7 @@ static int capture_buffer_bind(struct v4l2r_context *ctx,
 	 * instead of waiting. The old buffer is orphaned with its contents
 	 * and last_ref_seq intact, so frames already submitted still find it
 	 * by its timestamp, and it is only recycled once they are done. Only
-	 * for decoder-allocated buffers nobody has exported: an exported
+	 * for decoder-allocated buffers no client has exported: an exported
 	 * buffer's memory is what the client sees for this surface. At most
 	 * rebind_spare buffers are added beyond the bound ones.
 	 */
