@@ -26,7 +26,10 @@ def interrupt_wrapper_check(root):
         "from pathlib import Path\n"
         "if os.environ.get('FIXTURE_IGNORE_TERM'):\n"
         "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "Path(os.environ['FIXTURE_PID']).write_text(str(os.getpid()))\n"
+        "pid = Path(os.environ['FIXTURE_PID'])\n"
+        "tmp = pid.with_suffix('.tmp')\n"
+        "tmp.write_text(str(os.getpid()))\n"
+        "os.replace(tmp, pid)\n"
         "time.sleep(60)\n")
     for stubborn in (False, True):
         pidfile = fixture / ('stubborn.pid' if stubborn else 'responsive.pid')
@@ -39,9 +42,12 @@ def interrupt_wrapper_check(root):
                                     '--directory', str(fixture), '--output', str(output)], env=env)
         try:
             deadline = time.monotonic() + 5
-            while not pidfile.exists() and time.monotonic() < deadline and process.poll() is None:
+            # The pid file appears atomically; also require content so a
+            # partly written file is never parsed.
+            while (not pidfile.exists() or not pidfile.read_text().strip()) \
+                    and time.monotonic() < deadline and process.poll() is None:
                 time.sleep(0.02)
-            assert pidfile.exists(), 'fixture coordinator did not start'
+            assert pidfile.exists() and pidfile.read_text().strip(), 'fixture coordinator did not start'
             child = int(pidfile.read_text())
             process.send_signal(signal.SIGTERM)
             assert process.wait(timeout=8) == 128 + signal.SIGTERM
