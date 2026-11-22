@@ -913,12 +913,14 @@ static int capture_buffer_bind(struct v4l2r_context *ctx,
 	 * and last_ref_seq intact, so frames already submitted still find it
 	 * by its timestamp, and it is only recycled once they are done. Only
 	 * for decoder-allocated buffers no client has exported: an exported
-	 * buffer's memory is what the client sees for this surface. At most
+	 * buffer's memory is what the client sees for this surface. Likewise
+	 * while a derived image maps the buffer: the image must keep showing
+	 * this surface, and the orphan must not be recycled under it. At most
 	 * rebind_spare buffers are added beyond the bound ones.
 	 */
 	if (ctx->rebind_spare && ctx->capture_memory == V4L2_MEMORY_MMAP &&
 	    !ctx->conv && !capture_exported(&ctx->captures[index]) &&
-	    !capture_idle(ctx, index)) {
+	    !surface->image_refs && !capture_idle(ctx, index)) {
 		int idle = free_list_take_idle(ctx);
 
 		if (idle < 0 && ctx->free_count < ctx->rebind_spare)

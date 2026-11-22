@@ -887,7 +887,7 @@ static void rebind(const char *name)
     VASurfaceID sid = surface();
     struct v4l2r_surface *s = V4L2R_SURFACE(drv, sid);
     bool exported = !strcmp(name, "exported");
-    bool derived = !strcmp(name, "derived");
+    bool derived = !strcmp(name, "derived") || !strcmp(name, "derived-held");
     VAImage image = {0};
     if (exported || derived) {
         assert(picture(id, sid) == VA_STATUS_SUCCESS);
@@ -902,7 +902,8 @@ static void rebind(const char *name)
             /* The driver exports the buffer for its own mapping. */
             assert(table.vaDeriveImage(&va, sid, &image) == VA_STATUS_SUCCESS);
             assert(!ctx->captures[s->capture_index].client_exported);
-            assert(v4l2r_DestroyImage(&va, image.image_id) == VA_STATUS_SUCCESS);
+            if (!strcmp(name, "derived"))
+                assert(v4l2r_DestroyImage(&va, image.image_id) == VA_STATUS_SUCCESS);
         }
     }
     assert(ctx->capture_memory == V4L2_MEMORY_MMAP || (!exported && !derived));
@@ -919,7 +920,8 @@ static void rebind(const char *name)
     if (!strcmp(name, "alloc-fail")) inject(VIDIOC_CREATE_BUFS, -1, 1, ENOMEM);
     assert(picture(id, sid) == VA_STATUS_SUCCESS);
     if (!strcmp(name, "alloc-fail")) { assert(injected == 1); armed = false; }
-    bool waits = !strcmp(name, "off") || exported || !strcmp(name, "alloc-fail");
+    bool waits = !strcmp(name, "off") || exported || !strcmp(name, "derived-held") ||
+                 !strcmp(name, "alloc-fail");
     if (waits) {
         /* Same buffer, after waiting for it; the pool did not grow. */
         assert(s->capture_index == busy && hw_waits == 1);
@@ -978,6 +980,8 @@ static void rebind(const char *name)
     }
     hw_busy = finish_on_poll = false; hw_finish(); hw_waits = 0;
     assert(table.vaSyncSurface(&va, sid) == VA_STATUS_SUCCESS);
+    if (!strcmp(name, "derived-held"))
+        assert(v4l2r_DestroyImage(&va, image.image_id) == VA_STATUS_SUCCESS);
     assert(table.vaDestroyContext(&va, id) == VA_STATUS_SUCCESS);
     teardown();
 }
