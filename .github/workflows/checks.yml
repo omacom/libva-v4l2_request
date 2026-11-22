@@ -129,7 +129,10 @@ jobs:
   uapi-minimal:
     name: oldest kernel UAPI (5.4 headers, all stateless codecs compiled out)
     runs-on: ubuntu-latest
-    container: ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
+    container:
+      image: ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
+      # Privileged so the step below can lower vm.mmap_rnd_bits for the job.
+      options: --privileged
     steps:
       - name: Install git and build dependencies
         # The pinned 20.04 base image ships without tzdata, and the archive's
@@ -150,6 +153,13 @@ jobs:
           pkg-config --modversion libva libdrm
           grep -E 'define VA_(MAJOR|MINOR)_VERSION' /usr/include/va/va_version.h
           dpkg-query -W -f='${Package} ${Version}\n' linux-libc-dev libva-dev libdrm-dev ffmpeg
+      - name: Keep the mmap randomisation within what the 20.04 sanitizers support
+        # GCC 9's ASan shadow layout predates 32-bit mmap randomisation. On hosts
+        # that default to vm.mmap_rnd_bits=32 (ubuntu-26.04) every sanitized test
+        # spins on AddressSanitizer:DEADLYSIGNAL until its timeout.
+        run: |
+          echo "vm.mmap_rnd_bits was $(cat /proc/sys/vm/mmap_rnd_bits)"
+          sysctl -w vm.mmap_rnd_bits=28
       - name: Build with sanitizers and run the offline suite (no codec UAPI available)
         run: |
           meson setup build -Db_sanitize=address,undefined
