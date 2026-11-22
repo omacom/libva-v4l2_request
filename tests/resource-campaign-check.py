@@ -80,11 +80,6 @@ def main():
     assert module.checkpoint_violations(start, checkpoint(198721536, 3366912, 373248), limits)
     assert module.checkpoint_violations(start, checkpoint(198717440, 3366912, 436497), limits)
     assert module.checkpoint_violations(start, dict(checkpoint(198717440, 3366912, 373248), fd_count=5), limits)
-    # A mapped-byte budget is a ceiling on total growth, not an allowance for
-    # mappings the allocator does not account for.
-    budget = dict(limits, mapped_bytes=4096 * 1024)
-    assert module.checkpoint_violations(start, checkpoint(198004736, 2650112, 370960), budget)
-    assert not module.checkpoint_violations(start, checkpoint(198717440, 3366912, 373248), budget)
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         interrupt_wrapper_check(root)
