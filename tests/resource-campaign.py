@@ -79,7 +79,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def allocator_violations(baseline, sample, maximum):
+def allocator_violations(baseline, sample, maximum, allowance=0):
     """A larger allocator arena is acceptable only with bounded live/cache use.
 
     mallinfo includes tcache chunks as allocated. It is not a driver ownership
@@ -94,9 +94,32 @@ def allocator_violations(baseline, sample, maximum):
     if live_growth > maximum:
         violations.append('allocator-accounted allocation growth exceeds {} bytes'.format(maximum))
     arena_growth = max(0, new['arena'] - old['arena']) + max(0, new['mmap'] - old['mmap'])
-    if mapped_growth > arena_growth:
+    if mapped_growth > arena_growth + allowance:
         violations.append('mapping growth exceeds allocator arena accounting')
     return violations
+
+
+def allocator_limits(limits, samples):
+    """Let the mapped_bytes limit take the allocator's own arena growth.
+
+    mapped_bytes sums every range in /proc/PID/maps, so a brk heap that malloc
+    extends by a few pages counts as mapping growth even when nothing leaked.
+    The arena and mmap counters say how much of the growth is the allocator's;
+    allocator_violations still bounds live allocations, and FD, map count and
+    dma-buf limits are unchanged.
+    """
+    if not all('allocated' in s['allocator'] for s in samples):
+        return limits
+    old = samples[0]['allocator']
+    allowance = max(max(0, s['allocator']['arena'] - old['arena']) +
+                    max(0, s['allocator']['mmap'] - old['mmap']) for s in samples)
+    return dict(limits, mapped_bytes=limits['mapped_bytes'] + allowance)
+
+
+def checkpoint_violations(baseline, sample, limits):
+    current = sampler.summarize([baseline, sample], allocator_limits(limits, [baseline, sample]), acceptance=True)
+    return current['violations'] + allocator_violations(baseline, sample, limits['heap_allocated_bytes'],
+                                                        limits['mapped_bytes'])
 
 
 def lines(process, deadline):
@@ -231,10 +254,9 @@ def campaign(args):
                     now = time.monotonic()
                     if baseline_time is None:
                         baseline_time = now
-                    current = sampler.summarize([samples[0], sample], limits, acceptance=True)
-                    current['violations'].extend(allocator_violations(samples[0], sample, limits['heap_allocated_bytes']))
-                    if current['violations']:
-                        raise ValueError('; '.join(current['violations']))
+                    violations = checkpoint_violations(samples[0], sample, limits)
+                    if violations:
+                        raise ValueError('; '.join(violations))
                     stop_sent = bool(args.seconds and now - baseline_time >= args.seconds)
                     process.stdin.write(b'stop\n' if stop_sent else b'go\n')
                     process.stdin.flush()
@@ -248,7 +270,9 @@ def campaign(args):
             elapsed = time.monotonic() - baseline_time if baseline_time else 0
             if rc or frames or len(samples) < 2 or (args.seconds and not stop_sent) or (not args.seconds and last_checkpoint != args.cycles):
                 raise ValueError('incomplete/nonzero campaign')
-            summary = sampler.summarize(samples, limits, acceptance=True)
+            summary = sampler.summarize(samples, allocator_limits(limits, samples), acceptance=True)
+            summary['mapped_bytes_allocator_allowance'] = summary['limits']['mapped_bytes'] - limits['mapped_bytes']
+            summary['limits'] = limits
             if all('allocated' in s['allocator'] for s in samples):
                 summary['allocator_bytes'] = {key: {'initial': samples[0]['allocator'][key],
                     'minimum': min(s['allocator'][key] for s in samples),
