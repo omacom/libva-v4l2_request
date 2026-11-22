@@ -46,6 +46,16 @@ static struct VADriverContext va;
 static struct VADriverVTable table;
 static struct v4l2r_driver *drv;
 static VAConfigID cfg;
+/* Rebind cases: completions held back as if the hardware were still decoding.
+ * With finish_on_poll, a driver wait for a CAPTURE buffer releases them and is
+ * counted, so a case can tell a rebind (no wait) from a wait. */
+static bool hw_busy, finish_on_poll;
+static uint64_t hw_held;
+static unsigned int hw_slot, hw_waits;
+static void hw_finish(void)
+{
+    fds[hw_slot].capture_ready |= hw_held; hw_held = 0;
+}
 
 void *__real_malloc(size_t size);
 void *__real_calloc(size_t n, size_t size);
@@ -331,7 +341,11 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
         assert(fds[i].request_video >= 0 && fds[i].request_output >= 0);
         unsigned int v = fd_slot(fds[i].request_video);
         fds[v].output_ready |= 1u << fds[i].request_output;
-        if (fds[i].outputs) fds[v].capture_ready |= UINT64_C(1) << fds[i].captures;
+        if (fds[i].outputs) {
+            uint64_t done = UINT64_C(1) << fds[i].captures;
+            if (hw_busy) { hw_held |= done; hw_slot = v; }
+            else fds[v].capture_ready |= done;
+        }
         fds[i].request_done = true; return 0;
     }
     if (request == MEDIA_REQUEST_IOC_REINIT) {
@@ -380,6 +394,9 @@ int __wrap_poll(struct pollfd *p, nfds_t n, int timeout)
     }
     if (poll_timeouts) { poll_timeouts--; return 0; }
     unsigned int i = fd_slot(p[0].fd);
+    if (finish_on_poll && hw_held && fds[i].kind == VIDEO && (p[0].events & POLLIN)) {
+        hw_finish(); hw_waits++;
+    }
     if (fds[i].kind == VIDEO && !fds[i].output_ready && !fds[i].capture_ready) return 0;
     p[0].revents = poll_events ? poll_events : p[0].events;
     return 1;
@@ -836,6 +853,152 @@ static void sweep(const char *name)
     for (unsigned int n = 1; n <= count; n++) sweep_run(name, n);
     printf("SWEEP %s: %u operation-index failures; recovery and resource balance verified\n", name, count);
 }
+static int free_entry(const struct v4l2r_context *ctx, unsigned int n)
+{
+    assert(n < ctx->free_count);
+    return ctx->free_captures[(ctx->free_head + n) % V4L2R_MAX_CAPTURE_BUFFERS];
+}
+/* A surface handed back while its CAPTURE buffer is busy is decoded into an
+ * idle buffer instead of waiting (V4L2R_REBIND), within the spare limit, and
+ * only when no client holds the busy buffer's memory. */
+static void rebind(const char *name)
+{
+    bool spares = !strcmp(name, "spare-limit") || !strcmp(name, "spare-first");
+    const char *env = !strcmp(name, "off") ? "0" : spares ? "2" : NULL;
+    if (env) assert(!setenv("V4L2R_REBIND", env, 1));
+    else assert(!unsetenv("V4L2R_REBIND"));
+    /* spare-limit covers the wait for the bound buffer (V4L2R_REBIND_FIRST=0). */
+    if (!strcmp(name, "spare-limit")) assert(!setenv("V4L2R_REBIND_FIRST", "0", 1));
+    else assert(!unsetenv("V4L2R_REBIND_FIRST"));
+    setup();
+    if (!strcmp(name, "env")) {
+        static const struct { const char *value; unsigned int spare; } values[] = {
+            {NULL, V4L2R_REBIND_DEFAULT}, {"0", 0}, {"-3", 0}, {"3", 3},
+            {"99", V4L2R_REBIND_MAX},
+        };
+        for (unsigned int n = 0; n < sizeof(values) / sizeof(values[0]); n++) {
+            if (values[n].value) assert(!setenv("V4L2R_REBIND", values[n].value, 1));
+            else assert(!unsetenv("V4L2R_REBIND"));
+            VAContextID id = context();
+            assert(V4L2R_CONTEXT(drv, id)->rebind_spare == values[n].spare);
+            assert(table.vaDestroyContext(&va, id) == VA_STATUS_SUCCESS);
+        }
+        assert(!unsetenv("V4L2R_REBIND"));
+        teardown(); return;
+    }
+    VAContextID id = context();
+    struct v4l2r_context *ctx = V4L2R_CONTEXT(drv, id);
+    VASurfaceID sid = surface();
+    struct v4l2r_surface *s = V4L2R_SURFACE(drv, sid);
+    bool exported = !strcmp(name, "exported");
+    bool derived = !strcmp(name, "derived") || !strcmp(name, "derived-held");
+    VAImage image = {0};
+    if (exported || derived) {
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(table.vaSyncSurface(&va, sid) == VA_STATUS_SUCCESS);
+        if (exported) {
+            VADRMPRIMESurfaceDescriptor desc;
+            assert(table.vaExportSurfaceHandle(&va, sid,
+                VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, 0, &desc) == VA_STATUS_SUCCESS);
+            close_export(&desc);
+            assert(ctx->captures[s->capture_index].client_exported);
+        } else {
+            /* The driver exports the buffer for its own mapping. */
+            assert(table.vaDeriveImage(&va, sid, &image) == VA_STATUS_SUCCESS);
+            assert(!ctx->captures[s->capture_index].client_exported);
+            if (!strcmp(name, "derived"))
+                assert(v4l2r_DestroyImage(&va, image.image_id) == VA_STATUS_SUCCESS);
+        }
+    }
+    assert(ctx->capture_memory == V4L2_MEMORY_MMAP || (!exported && !derived));
+    /* The surface's decode stays in flight. */
+    hw_busy = true;
+    assert(picture(id, sid) == VA_STATUS_SUCCESS);
+    assert(ctx->capture_memory == V4L2_MEMORY_MMAP);
+    int busy = s->capture_index;
+    unsigned int pool = ctx->nb_captures;
+    uint64_t busy_ref = ctx->captures[busy].last_ref_seq;
+    assert(busy >= 0 && (ctx->queued_capture & (UINT64_C(1) << busy)));
+    assert(!ctx->free_count);
+    finish_on_poll = true;
+    if (!strcmp(name, "alloc-fail")) inject(VIDIOC_CREATE_BUFS, -1, 1, ENOMEM);
+    assert(picture(id, sid) == VA_STATUS_SUCCESS);
+    if (!strcmp(name, "alloc-fail")) { assert(injected == 1); armed = false; }
+    bool waits = !strcmp(name, "off") || exported || !strcmp(name, "derived-held") ||
+                 !strcmp(name, "alloc-fail");
+    if (waits) {
+        /* Same buffer, after waiting for it; the pool did not grow. */
+        assert(s->capture_index == busy && hw_waits == 1);
+        assert(ctx->nb_captures == pool && !ctx->free_count);
+        assert(ctx->captures[busy].surface == s);
+    } else {
+        /* A new buffer, no wait. The busy one is orphaned with its decode
+         * still in flight and its reference sequence intact. */
+        int now = s->capture_index;
+        assert(now >= 0 && now != busy && !hw_waits);
+        assert(ctx->nb_captures == pool + 1);
+        assert(ctx->captures[now].surface == s && !ctx->captures[busy].surface);
+        assert(ctx->queued_capture & (UINT64_C(1) << busy));
+        assert(ctx->captures[busy].last_ref_seq == busy_ref);
+        assert(ctx->free_count == 1 && free_entry(ctx, 0) == busy);
+        assert(v4l2r_surface_timestamp(ctx, sid) == v4l2r_capture_index_timestamp(now));
+    }
+    if (!strcmp(name, "target")) {
+        /* Once idle, the orphan is recycled before the pool grows. */
+        hw_busy = false; hw_finish();
+        assert(table.vaSyncSurface(&va, sid) == VA_STATUS_SUCCESS);
+        VASurfaceID other = surface();
+        assert(picture(id, other) == VA_STATUS_SUCCESS);
+        assert(V4L2R_SURFACE(drv, other)->capture_index == busy);
+        assert(ctx->nb_captures == pool + 1 && !ctx->free_count);
+        assert(table.vaSyncSurface(&va, other) == VA_STATUS_SUCCESS);
+    } else if (!strcmp(name, "orphan")) {
+        /* Target and orphan busy: grow, and keep the free list in order. */
+        int second = s->capture_index;
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        int third = s->capture_index;
+        assert(!hw_waits && third != busy && third != second);
+        assert(ctx->nb_captures == pool + 2 && ctx->free_count == 2);
+        assert(free_entry(ctx, 0) == busy && free_entry(ctx, 1) == second);
+        hw_finish();
+        assert(table.vaSyncSurface(&va, sid) == VA_STATUS_SUCCESS);
+        assert(!ctx->queued_capture);
+        /* Busy target, idle orphans: take the oldest, do not grow. */
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(s->capture_index == third);
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(!hw_waits && s->capture_index == busy);
+        assert(ctx->nb_captures == pool + 2 && ctx->free_count == 2);
+        assert(free_entry(ctx, 0) == second && free_entry(ctx, 1) == third);
+    } else if (!strcmp(name, "spare-limit")) {
+        /* V4L2R_REBIND=2: two spares, then the busy buffer is waited for. */
+        assert(ctx->rebind_spare == 2);
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(!hw_waits && ctx->nb_captures == pool + 2 && ctx->free_count == 2);
+        int last = s->capture_index;
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(hw_waits == 1 && s->capture_index == last);
+        assert(ctx->nb_captures == pool + 2 && ctx->free_count == 2);
+    } else if (!strcmp(name, "spare-first")) {
+        /* V4L2R_REBIND=2, default V4L2R_REBIND_FIRST: two spares, then the
+         * spare that frees first is waited for instead of the bound buffer. */
+        assert(ctx->rebind_spare == 2 && ctx->rebind_first);
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(!hw_waits && ctx->nb_captures == pool + 2 && ctx->free_count == 2);
+        int last = s->capture_index, first = free_entry(ctx, 0);
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(hw_waits == 1 && s->capture_index == first && first != last);
+        assert(ctx->nb_captures == pool + 2 && ctx->free_count == 2);
+    } else if (!strcmp(name, "off")) {
+        assert(!ctx->rebind_spare);
+    }
+    hw_busy = finish_on_poll = false; hw_finish(); hw_waits = 0;
+    assert(table.vaSyncSurface(&va, sid) == VA_STATUS_SUCCESS);
+    if (!strcmp(name, "derived-held"))
+        assert(v4l2r_DestroyImage(&va, image.image_id) == VA_STATUS_SUCCESS);
+    assert(table.vaDestroyContext(&va, id) == VA_STATUS_SUCCESS);
+    teardown();
+}
 int main(int argc, char **argv)
 {
     struct rlimit core = {0, 0}; assert(!setrlimit(RLIMIT_CORE, &core));
@@ -843,6 +1006,7 @@ int main(int argc, char **argv)
     const char *test = argv[1];
     if (!strncmp(test, "sweep-", 6)) { sweep(test + 6); return 0; }
     if (!strncmp(test, "churn-", 6)) { churn(test + 6); return 0; }
+    if (!strncmp(test, "rebind-", 7)) { rebind(test + 7); return 0; }
     hold = sliced = !strncmp(test, "partial-", 8);
     setup();
     VAContextID id = context(); VASurfaceID sid = surface();

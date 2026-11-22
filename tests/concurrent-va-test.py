@@ -26,11 +26,20 @@ def exited(pid):
     except FileNotFoundError:return True
 
 
+def read_pid(path):
+    # The fixture writes its pid with Path.write_text(), which creates the
+    # file before it writes, so the file can exist and still be empty.
+    try:text=path.read_text()
+    except FileNotFoundError:return None
+    return int(text) if text.strip().isdigit() else None
+
+
 def wait_file(path):
     limit=time.monotonic()+4
-    while not path.exists() and time.monotonic()<limit:time.sleep(.01)
-    require(path.exists(),'fixture did not start')
-    return int(path.read_text())
+    while read_pid(path) is None and time.monotonic()<limit:time.sleep(.01)
+    pid=read_pid(path)
+    require(pid is not None,'fixture did not start')
+    return pid
 
 
 def oracle_tests():
