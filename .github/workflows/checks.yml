@@ -315,6 +315,7 @@ jobs:
           PY
           cppcheck --project=build-sa/compile_commands_src.json \
             --enable=warning --inline-suppr --suppress=missingIncludeSystem \
+            --include="$(pkg-config --variable=includedir libva)/va/va_version.h" \
             --error-exitcode=1 -j 2
 
   corpus:
