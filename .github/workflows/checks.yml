@@ -95,7 +95,7 @@ jobs:
           meson test -C build --print-errorlogs
       - name: Verify the auto-detected codec test set (h264 and mpeg2 and vp8 only)
         run: |
-          tests="$(meson test -C build --list)"
+          tests="$(meson test -C build --list | sed 's/^[^:]*://')"
           echo "$tests"
           printf '%s\n' "$tests" | grep -q '^h264-profile$' || {
             echo 'ERROR: h264 tests missing despite 5.11 UAPI headers' >&2
@@ -156,7 +156,7 @@ jobs:
           meson test -C build --print-errorlogs
       - name: Verify the auto-detected codec test set (no stateless codec UAPI)
         run: |
-          tests="$(meson test -C build --list)"
+          tests="$(meson test -C build --list | sed 's/^[^:]*://')"
           echo "$tests"
           for absent in hevc-parser vp9-malformed h264-incomplete h264-parser h264-profile image-bounds \
                         fuzz-h264 fuzz-hevc fuzz-vp9; do
@@ -224,7 +224,7 @@ jobs:
             -Dcodec_vp8=disabled -Dcodec_vp9=disabled -Dcodec_av1=disabled
           meson compile -C build-off
           meson test -C build-off --print-errorlogs
-          tests="$(meson test -C build-off --list)"
+          tests="$(meson test -C build-off --list | sed 's/^[^:]*://')"
           echo "$tests"
           for absent in hevc-parser vp9-malformed vp9-state vp9-parser vp9-references \
                         h264-incomplete h264-slice-count h264-references h264-parser h264-profile \
@@ -247,7 +247,7 @@ jobs:
           meson setup build-mixed -Dcodec_hevc=enabled -Dcodec_vp9=disabled
           meson compile -C build-mixed
           meson test -C build-mixed --print-errorlogs
-          tests="$(meson test -C build-mixed --list)"
+          tests="$(meson test -C build-mixed --list | sed 's/^[^:]*://')"
           echo "$tests"
           printf '%s\n' "$tests" | grep -q '^hevc-parser$' || {
             echo 'ERROR: hevc-parser missing with -Dcodec_hevc=enabled' >&2
