@@ -79,7 +79,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def allocator_violations(baseline, sample, maximum, allowance=0):
+def allocator_violations(baseline, sample, maximum):
     """A larger allocator arena is acceptable only with bounded live/cache use.
 
     mallinfo includes tcache chunks as allocated. It is not a driver ownership
@@ -94,7 +94,7 @@ def allocator_violations(baseline, sample, maximum, allowance=0):
     if live_growth > maximum:
         violations.append('allocator-accounted allocation growth exceeds {} bytes'.format(maximum))
     arena_growth = max(0, new['arena'] - old['arena']) + max(0, new['mmap'] - old['mmap'])
-    if mapped_growth > arena_growth + allowance:
+    if mapped_growth > arena_growth:
         violations.append('mapping growth exceeds allocator arena accounting')
     return violations
 
@@ -118,8 +118,7 @@ def allocator_limits(limits, samples):
 
 def checkpoint_violations(baseline, sample, limits):
     current = sampler.summarize([baseline, sample], allocator_limits(limits, [baseline, sample]), acceptance=True)
-    return current['violations'] + allocator_violations(baseline, sample, limits['heap_allocated_bytes'],
-                                                        limits['mapped_bytes'])
+    return current['violations'] + allocator_violations(baseline, sample, limits['heap_allocated_bytes'])
 
 
 def lines(process, deadline):
