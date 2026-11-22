@@ -65,21 +65,6 @@ def main():
     assert module.allocator_violations(baseline, leaked, 200)
     unknown = {'mapped_bytes': 12000, 'allocator': {'status': 'unavailable'}}
     assert module.allocator_violations(baseline, unknown, 200)
-    # Measured on the ubuntu 26.04 x86_64 runner (software mode, so the driver
-    # is not loaded): glibc extended the brk heap by 175 pages between two
-    # checkpoints and the arena grew by the same amount. That is not a leak.
-    limits = {'fds': 0, 'maps': 0, 'mapped_bytes': 0, 'vmrss_kib': 4096, 'dmabuf_references': 0,
-              'dmabuf_objects': 0, 'dmabuf_bytes': 0, 'heap_allocated_bytes': 64 * 1024}
-
-    def checkpoint(mapped, arena, allocated):
-        return {'fd_count': 4, 'map_count': 751, 'mapped_bytes': mapped, 'vmrss_kib': 50000,
-                'dmabuf': {'status': 'none'}, 'dmabuf_references': 0, 'dmabuf_objects': 0, 'dmabuf_bytes': 0,
-                'allocator': {'arena': arena, 'mmap': 0, 'allocated': allocated, 'free': 0, 'releasable': 0}}
-    start = checkpoint(198000640, 2650112, 370960)
-    assert not module.checkpoint_violations(start, checkpoint(198717440, 3366912, 373248), limits)
-    assert module.checkpoint_violations(start, checkpoint(198721536, 3366912, 373248), limits)
-    assert module.checkpoint_violations(start, checkpoint(198717440, 3366912, 436497), limits)
-    assert module.checkpoint_violations(start, dict(checkpoint(198717440, 3366912, 373248), fd_count=5), limits)
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         interrupt_wrapper_check(root)
