@@ -25,10 +25,14 @@ with tempfile.TemporaryDirectory() as directory:
         handle = None
         try:
             end = time.monotonic() + 5
-            while not pidfile.exists() and time.monotonic() < end:
+            # write_text() creates the file before it writes the pid.
+            while time.monotonic() < end:
+                text = pidfile.read_text() if pidfile.exists() else ''
+                if text.strip().isdigit():
+                    break
                 time.sleep(.01)
-            assert pidfile.exists()
-            pid = int(pidfile.read_text())
+            assert text.strip().isdigit()
+            pid = int(text)
             # pidfd binds fixture cleanup to this process identity where available.
             if hasattr(os, 'pidfd_open'):
                 handle = os.pidfd_open(pid)
