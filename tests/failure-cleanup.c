@@ -863,9 +863,13 @@ static int free_entry(const struct v4l2r_context *ctx, unsigned int n)
  * only when no client holds the busy buffer's memory. */
 static void rebind(const char *name)
 {
-    const char *env = !strcmp(name, "off") ? "0" : !strcmp(name, "spare-limit") ? "2" : NULL;
+    bool spares = !strcmp(name, "spare-limit") || !strcmp(name, "spare-first");
+    const char *env = !strcmp(name, "off") ? "0" : spares ? "2" : NULL;
     if (env) assert(!setenv("V4L2R_REBIND", env, 1));
     else assert(!unsetenv("V4L2R_REBIND"));
+    /* spare-limit covers the wait for the bound buffer (V4L2R_REBIND_FIRST=0). */
+    if (!strcmp(name, "spare-limit")) assert(!setenv("V4L2R_REBIND_FIRST", "0", 1));
+    else assert(!unsetenv("V4L2R_REBIND_FIRST"));
     setup();
     if (!strcmp(name, "env")) {
         static const struct { const char *value; unsigned int spare; } values[] = {
@@ -974,6 +978,16 @@ static void rebind(const char *name)
         int last = s->capture_index;
         assert(picture(id, sid) == VA_STATUS_SUCCESS);
         assert(hw_waits == 1 && s->capture_index == last);
+        assert(ctx->nb_captures == pool + 2 && ctx->free_count == 2);
+    } else if (!strcmp(name, "spare-first")) {
+        /* V4L2R_REBIND=2, default V4L2R_REBIND_FIRST: two spares, then the
+         * spare that frees first is waited for instead of the bound buffer. */
+        assert(ctx->rebind_spare == 2 && ctx->rebind_first);
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(!hw_waits && ctx->nb_captures == pool + 2 && ctx->free_count == 2);
+        int last = s->capture_index, first = free_entry(ctx, 0);
+        assert(picture(id, sid) == VA_STATUS_SUCCESS);
+        assert(hw_waits == 1 && s->capture_index == first && first != last);
         assert(ctx->nb_captures == pool + 2 && ctx->free_count == 2);
     } else if (!strcmp(name, "off")) {
         assert(!ctx->rebind_spare);

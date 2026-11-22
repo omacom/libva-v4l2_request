@@ -46,7 +46,7 @@ foreach case : ['normal', 'early-export', 'held-image']
   test('failure-churn-' + case, failure_cleanup, args: ['churn-' + case], timeout: 120)
 endforeach
 foreach case : ['env', 'off', 'target', 'orphan', 'exported', 'derived', 'derived-held',
-                'alloc-fail', 'spare-limit']
+                'alloc-fail', 'spare-limit', 'spare-first']
   test('rebind-' + case, failure_cleanup, args: ['rebind-' + case], timeout: 15)
 endforeach
 if conf.get('HAVE_V4L2_M2M_HOLD_CAPTURE_BUF') == 1
