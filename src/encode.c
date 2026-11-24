@@ -10,8 +10,8 @@
  * client asks for what such an encoder does by itself: no B-frames (the
  * driver reports one forward reference only), the picture types the
  * encoder picks (a periodic IDR at the client's intra period, a forced IDR
- * when the client asks for one), and no packed headers (the encoder writes
- * its own SPS/PPS/VPS in front of every IDR, in the bitstream).
+ * when the client asks for one), and no packed HEVC headers (the encoder
+ * writes its own SPS/PPS/VPS in front of every IDR, in the bitstream).
  *
  * Like the video processing path (convert.c) every picture is one
  * synchronous job: vaEndPicture() queues the input surface's dma-buf,
@@ -172,12 +172,23 @@ uint32_t v4l2r_encoder_attribute(VAProfile profile, VAConfigAttribType type)
 	case VAConfigAttribEncPackedHeaders:
 		/*
 		 * The encoder writes its own parameter sets in band, in front of
-		 * every IDR. Offering packed sequence headers anyway lets a client
-		 * build them for its container (FFmpeg writes extradata, i.e. avcC /
-		 * hvcC, only with this bit); the packed buffers it then sends are
-		 * accepted and dropped in v4l2r_enc_render. Without it, Matroska
+		 * every IDR. For H.264, offering packed sequence headers anyway
+		 * lets a client build them for its container (FFmpeg writes
+		 * extradata, i.e. avcC, only with this bit); the packed buffers it
+		 * then sends are accepted and dropped in v4l2r_enc_render_buffer,
+		 * and the client's SPS/PPS match the encoder's. Without it, Matroska
 		 * refuses the stream before the first frame (empty CodecPrivate).
+		 *
+		 * Not for HEVC: the client's VPS/SPS/PPS would not describe the
+		 * stream. The encoder picks its own short-term reference picture
+		 * sets in the SPS, scaling lists, init_qp and wavefront entry
+		 * points, and v4l2r_enc_render_buffer passes none of the client's
+		 * choices for them on, so an hvcC built from the client's sets
+		 * disagrees with the in-band ones. A client that needs a global
+		 * header takes it from the first coded picture.
 		 */
+		if (profile == VAProfileHEVCMain)
+			return VA_ENC_PACKED_HEADER_NONE;
 		return VA_ENC_PACKED_HEADER_SEQUENCE;
 	case VAConfigAttribEncMaxRefFrames:
 		/* One forward reference, no backward: no B-frames. */
